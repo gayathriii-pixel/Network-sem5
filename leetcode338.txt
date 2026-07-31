@@ -1,0 +1,26 @@
+leetcode 338
+
+#include <stdlib.h>
+
+/**
+ * Note: The returned array must be malloced, assume caller calls free().
+ */
+int* countBits(int n, int* returnSize) {
+    // Return panna pora array-oda total size n + 1
+    *returnSize = n + 1;
+    
+    // Memory allocation for the output array (O(n) Space)
+    int* dp = (int*)malloc((*returnSize) * sizeof(int));
+    
+    // Base case: 0 elements la zero dhan set bit value
+    dp[0] = 0;
+    
+    // DP state loop optimization
+    for (int i = 1; i <= n; i++) {
+        // i >> 1 -> i/2 index calculation
+        // i & 1  -> check odd or even logic (i%2)
+        dp[i] = dp[i >> 1] + (i & 1);
+    }
+    
+    return dp;
+}

@@ -1,0 +1,15 @@
+letcode number complement
+
+int findComplement(int num) {
+    // Use an unsigned int to prevent overflow when left shifting
+    unsigned int mask = 1;
+    
+    // Shift mask left until it is strictly greater than num
+    while (mask <= num) {
+        mask <<= 1;
+    }
+    
+    // (mask - 1) creates a sequence of all 1s matching num's bit length
+    // num ^ (mask - 1) flips all the bits of num
+    return num ^ (mask - 1);
+}
