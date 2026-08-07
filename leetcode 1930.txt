@@ -1,0 +1,44 @@
+#include <string.h>
+#include <stdbool.h>
+
+int countPalindromicSubsequence(char* s) {
+    int first[26];
+    int last[26];
+    int total_palindromes = 0;
+    
+    // Initialize occurrence trackers
+    for (int i = 0; i < 26; i++) {
+        first[i] = -1;
+        last[i] = -1;
+    }
+    
+    // Step 1: Record the first and last position of each character
+    int len = strlen(s);
+    for (int i = 0; i < len; i++) {
+        int idx = s[i] - 'a';
+        if (first[idx] == -1) {
+            first[idx] = i;
+        }
+        last[idx] = i;
+    }
+    
+    // Step 2: Look for unique characters between matching boundaries
+    for (int i = 0; i < 26; i++) {
+        if (first[i] != -1 && last[i] > first[i] + 1) {
+            bool visited[26] = {false};
+            int unique_count = 0;
+            
+            // Count unique characters inside the boundaries
+            for (int j = first[i] + 1; j < last[i]; j++) {
+                int mid_idx = s[j] - 'a';
+                if (!visited[mid_idx]) {
+                    visited[mid_idx] = true;
+                    unique_count++;
+                }
+            }
+            total_palindromes += unique_count;
+        }
+    }
+    
+    return total_palindromes;
+}
