@@ -1,0 +1,10 @@
+#include <stdbool.h>
+
+bool hasAlternatingBits(int n) {
+    // Shift n right by 1 and XOR with n to see if all bits become 1
+    unsigned int x = n ^ (n >> 1);
+    
+    // Check if x is a number of all 1s (like 1111)
+    // If it is, x & (x + 1) must equal 0
+    return (x & (x + 1)) == 0;
+}

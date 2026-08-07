@@ -1,0 +1,54 @@
+#include <stdlib.h>
+
+// Simple comparison function for qsort to sort integers
+int compare(const void* a, const void* b) {
+    return (*(int*)a - *(int*)b);
+}
+
+int subarrayBitwiseORs(int* arr, int arrSize) {
+    // Large enough array to store rolling values and their history.
+    // 32 elements maximum per step * 50,000 size safely fits within this buffer limit.
+    int* s = (int*)malloc(sizeof(int) * arrSize * 33);
+    int size = 0;
+    int left = 0;
+    
+    for (int i = 0; i < arrSize; i++) {
+        int right = size;
+        
+        // Include the current element as a single-element subarray
+        s[size++] = arr[i];
+        
+        // Evaluate previous subarray OR states ending at (i - 1) 
+        // and combine them with the current element
+        for (int j = left; j < right; j++) {
+            int new_or = s[j] | arr[i];
+            
+            // Only insert if it changes the last pushed element 
+            // to deduplicate consecutive entries quickly
+            if (s[size - 1] != new_or) {
+                s[size++] = new_or;
+            }
+        }
+        // Update window tracker for the next iteration step
+        left = right;
+    }
+    
+    // Sort the entire collector array to perform an in-place unique filter
+    qsort(s, size, sizeof(int), compare);
+    
+    if (size == 0) {
+        free(s);
+        return 0;
+    }
+    
+    // Count unique entries inside the sorted array
+    int unique_count = 1;
+    for (int i = 1; i < size; i++) {
+        if (s[i] != s[i - 1]) {
+            unique_count++;
+        }
+    }
+    
+    free(s);
+    return unique_count;
+}
