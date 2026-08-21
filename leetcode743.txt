@@ -1,0 +1,155 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <limits.h>
+
+// Structure for an item in our Min-Heap
+typedef struct {
+    int node;
+    int dist;
+} HeapNode;
+
+// Structure for our Min-Heap Priority Queue
+typedef struct {
+    HeapNode* data;
+    int size;
+    int capacity;
+} MinHeap;
+
+// Structure to represent an edge in the adjacency list
+typedef struct Edge {
+    int to;
+    int weight;
+    struct Edge* next;
+} Edge;
+
+// --- Min-Heap Helper Functions ---
+MinHeap* createMinHeap(int capacity) {
+    MinHeap* heap = (MinHeap*)malloc(sizeof(MinHeap));
+    heap->data = (HeapNode*)malloc(capacity * sizeof(HeapNode));
+    heap->size = 0;
+    heap->capacity = capacity;
+    return heap;
+}
+
+void swap(HeapNode* a, HeapNode* b) {
+    HeapNode temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+void push(MinHeap* heap, int node, int dist) {
+    if (heap->size == heap->capacity) return;
+    int idx = heap->size++;
+    heap->data[idx].node = node;
+    heap->data[idx].dist = dist;
+    
+    // Bubble up
+    while (idx > 0 && heap->data[idx].dist < heap->data[(idx - 1) / 2].dist) {
+        swap(&heap->data[idx], &heap->data[(idx - 1) / 2]);
+        idx = (idx - 1) / 2;
+    }
+}
+
+HeapNode pop(MinHeap* heap) {
+    HeapNode root = heap->data[0];
+    heap->data[0] = heap->data[--heap->size];
+    
+    // Bubble down
+    int idx = 0;
+    while (idx * 2 + 1 < heap->size) {
+        int left = idx * 2 + 1;
+        int right = idx * 2 + 2;
+        int smallest = left;
+        
+        if (right < heap->size && heap->data[right].dist < heap->data[left].dist) {
+            smallest = right;
+        }
+        if (heap->data[idx].dist <= heap->data[smallest].dist) break;
+        
+        swap(&heap->data[idx], &heap->data[smallest]);
+        idx = smallest;
+    }
+    return root;
+}
+
+// --- Main Algorithm ---
+int networkDelayTime(int** times, int timesSize, int* timesColSize, int n, int k) {
+    // Allocate adjacency list heads (1-indexed nodes)
+    Edge** head = (Edge**)calloc(n + 1, sizeof(Edge*));
+    
+    // Build adjacency list
+    for (int i = 0; i < timesSize; i++) {
+        int u = times[i][0];
+        int v = times[i][1];
+        int w = times[i][2];
+        
+        Edge* newEdge = (Edge*)malloc(sizeof(Edge));
+        newEdge->to = v;
+        newEdge->weight = w;
+        newEdge->next = head[u];
+        head[u] = newEdge;
+    }
+    
+    // Initialize distances array
+    int* dist = (int*)malloc((n + 1) * sizeof(int));
+    for (int i = 1; i <= n; i++) dist[i] = INT_MAX;
+    
+    // Setup Min-Heap (size bound roughly by edges/nodes ratio)
+    MinHeap* heap = createMinHeap(timesSize + 1);
+    
+    // Process source node k
+    dist[k] = 0;
+    push(heap, k, 0);
+    
+    // Dijkstra loop
+    while (heap->size > 0) {
+        HeapNode curr = pop(heap);
+        int u = curr.node;
+        int d = curr.dist;
+        
+        // Skip stale data popped from heap
+        if (d > dist[u]) continue;
+        
+        // Traverse all neighbors of u
+        Edge* edge = head[u];
+        while (edge != NULL) {
+            int v = edge->to;
+            int w = edge->weight;
+            
+            if (dist[u] + w < dist[v]) {
+                dist[v] = dist[u] + w;
+                push(heap, v, dist[v]);
+            }
+            edge = edge->next;
+        }
+    }
+    
+    // Find the maximum time required to reach any node
+    int maxDelay = 0;
+    for (int i = 1; i <= n; i++) {
+        if (dist[i] == INT_MAX) {
+            maxDelay = -1; // Unreachable node found
+            break;
+        }
+        if (dist[i] > maxDelay) {
+            maxDelay = dist[i];
+        }
+    }
+    
+    // Free allocated memory
+    for (int i = 1; i <= n; i++) {
+        Edge* edge = head[i];
+        while (edge != NULL) {
+            Edge* temp = edge;
+            edge = edge->next;
+            free(temp);
+        }
+    }
+    free(head);
+    free(dist);
+    free(heap->data);
+    free(heap);
+    
+    return maxDelay;
+}

@@ -1,0 +1,49 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <limits.h>
+
+int findCheapestPrice(int n, int** flights, int flightsSize, int* flightsColSize, int src, int dst, int k) {
+    // Allocate memory for our main price tracking array
+    int* prices = (int*)malloc(n * sizeof(int));
+    // Allocate memory for the snapshot array used during a single layer exploration
+    int* tmpPrices = (int*)malloc(n * sizeof(int));
+    
+    // Initialize all distances to infinity
+    for (int i = 0; i < n; i++) {
+        prices[i] = INT_MAX;
+    }
+    prices[src] = 0; // Starting point cost is 0
+    
+    // We can take up to K stops, which means up to K + 1 edges/flights
+    for (int i = 0; i <= k; i++) {
+        // Clone current progress to the temporary array
+        memcpy(tmpPrices, prices, n * sizeof(int));
+        
+        // Iterate through all flights/edges to check for structural relaxation
+        for (int j = 0; j < flightsSize; j++) {
+            int u = flights[j][0];   // Flight origin
+            int v = flights[j][1];   // Flight destination
+            int price = flights[j][2]; // Ticket cost
+            
+            // If the source station 'u' has been reached in a previous layer
+            if (prices[u] != INT_MAX) {
+                // If taking this flight yields a cheaper total path to 'v', update temporary layout
+                if (prices[u] + price < tmpPrices[v]) {
+                    tmpPrices[v] = prices[u] + price;
+                }
+            }
+        }
+        // Commit the current layer's progress back to the master array
+        memcpy(prices, tmpPrices, n * sizeof(int));
+    }
+    
+    // Capture final result
+    int finalPrice = prices[dst] == INT_MAX ? -1 : prices[dst];
+    
+    // Free explicit dynamic allocations
+    free(prices);
+    free(tmpPrices);
+    
+    return finalPrice;
+}

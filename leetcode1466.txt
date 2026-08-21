@@ -1,0 +1,76 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+// Structure to represent an edge in the adjacency list
+typedef struct Edge {
+    int to;
+    int isOriginal; // 1 if original direction (u -> v), 0 if artificial reverse (v -> u)
+    struct Edge* next;
+} Edge;
+
+int minReorder(int n, int** connections, int connectionsSize, int* connectionsColSize) {
+    // Array of head pointers for the adjacency list
+    Edge** head = (Edge**)calloc(n, sizeof(Edge*));
+    
+    // Step 1: Build the undirected graph tracking the original direction
+    for (int i = 0; i < connectionsSize; i++) {
+        int u = connections[i][0];
+        int v = connections[i][1];
+        
+        // Add original edge u -> v (cost 1 because it points away from 0)
+        Edge* e1 = (Edge*)malloc(sizeof(Edge));
+        e1->to = v;
+        e1->isOriginal = 1;
+        e1->next = head[u];
+        head[u] = e1;
+        
+        // Add reverse edge v -> u (cost 0 because it points towards 0)
+        Edge* e2 = (Edge*)malloc(sizeof(Edge));
+        e2->to = u;
+        e2->isOriginal = 0;
+        e2->next = head[v];
+        head[v] = e2;
+    }
+    
+    // Step 2: Initialize BFS structures
+    int* queue = (int*)malloc(n * sizeof(int));
+    bool* visited = (bool*)calloc(n, sizeof(bool));
+    int qHead = 0, qTail = 0;
+    int reorderCount = 0;
+    
+    // Start BFS from city 0
+    queue[qTail++] = 0;
+    visited[0] = true;
+    
+    // Step 3: Standard BFS loop
+    while (qHead < qTail) {
+        int curr = queue[qHead++];
+        
+        Edge* e = head[curr];
+        while (e != NULL) {
+            int neighbor = e->to;
+            if (!visited[neighbor]) {
+                visited[neighbor] = true;
+                reorderCount += e->isOriginal; // Accumulate if the road needs reversing
+                queue[qTail++] = neighbor;
+            }
+            e = e->next;
+        }
+    }
+    
+    // Step 4: Free dynamically allocated memory to prevent leaks
+    for (int i = 0; i < n; i++) {
+        Edge* e = head[i];
+        while (e != NULL) {
+            Edge* tmp = e;
+            e = e->next;
+            free(tmp);
+        }
+    }
+    free(head);
+    free(queue);
+    free(visited);
+    
+    return reorderCount;
+}

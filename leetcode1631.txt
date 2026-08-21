@@ -1,0 +1,142 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <math.h>
+#include <limits.h>
+
+// Structure for a cell state in our Min-Heap
+typedef struct {
+    int r;
+    int c;
+    int effort;
+} HeapNode;
+
+// Structure for the Min-Heap Priority Queue
+typedef struct {
+    HeapNode* data;
+    int size;
+    int capacity;
+} MinHeap;
+
+// --- Min-Heap Helper Functions ---
+MinHeap* createMinHeap(int capacity) {
+    MinHeap* heap = (MinHeap*)malloc(sizeof(MinHeap));
+    heap->data = (HeapNode*)malloc(capacity * sizeof(HeapNode));
+    heap->size = 0;
+    heap->capacity = capacity;
+    return heap;
+}
+
+void swap(HeapNode* a, HeapNode* b) {
+    HeapNode temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+void push(MinHeap* heap, int r, int c, int effort) {
+    if (heap->size == heap->capacity) return;
+    int idx = heap->size++;
+    heap->data[idx].r = r;
+    heap->data[idx].c = c;
+    heap->data[idx].effort = effort;
+    
+    // Bubble up
+    while (idx > 0 && heap->data[idx].effort < heap->data[(idx - 1) / 2].effort) {
+        swap(&heap->data[idx], &heap->data[(idx - 1) / 2]);
+        idx = (idx - 1) / 2;
+    }
+}
+
+HeapNode pop(MinHeap* heap) {
+    HeapNode root = heap->data[0];
+    heap->data[0] = heap->data[--heap->size];
+    
+    // Bubble down
+    int idx = 0;
+    while (idx * 2 + 1 < heap->size) {
+        int left = idx * 2 + 1;
+        int right = idx * 2 + 2;
+        int smallest = left;
+        
+        if (right < heap->size && heap->data[right].effort < heap->data[left].effort) {
+            smallest = right;
+        }
+        if (heap->data[idx].effort <= heap->data[smallest].effort) break;
+        
+        swap(&heap->data[idx], &heap->data[smallest]);
+        idx = smallest;
+    }
+    return root;
+}
+
+// --- Main Algorithm ---
+int minimumEffortPath(int** heights, int heightsSize, int* heightsColSize) {
+    int rows = heightsSize;
+    int cols = heightsColSize[0];
+    
+    // Allocate 2D array tracking the minimum effort to reach each cell
+    int** effort = (int**)malloc(rows * sizeof(int*));
+    for (int i = 0; i < rows; i++) {
+        effort[i] = (int*)malloc(cols * sizeof(int));
+        for (int j = 0; j < cols; j++) {
+            effort[i][j] = INT_MAX;
+        }
+    }
+    
+    // Initialize Dijkstra starting point at (0, 0)
+    MinHeap* heap = createMinHeap(rows * cols * 4); // Safe upper bound sizing
+    effort[0][0] = 0;
+    push(heap, 0, 0, 0);
+    
+    // Cardinal direction offsets: Down, Up, Right, Left
+    int dr[] = {1, -1, 0, 0};
+    int dc[] = {0, 0, 1, -1};
+    
+    while (heap->size > 0) {
+        HeapNode curr = pop(heap);
+        int r = curr.r;
+        int c = curr.c;
+        int currEffort = curr.effort;
+        
+        // If we reached the bottom-right corner, we found our optimal min-max effort path
+        if (r == rows - 1 && c == cols - 1) {
+            int result = currEffort;
+            // Free memory blocks
+            for (int i = 0; i < rows; i++) free(effort[i]);
+            free(effort);
+            free(heap->data);
+            free(heap);
+            return result;
+        }
+        
+        // Skip outdated nodes popped late from heap
+        if (currEffort > effort[r][c]) continue;
+        
+        // Check 4 adjacent directions
+        for (int i = 0; i < 4; i++) {
+            int nr = r + dr[i];
+            int nc = c + dc[i];
+            
+            // Boundary validation
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+                // Calculation of maximum effort on this path variation
+                int diff = abs(heights[r][c] - heights[nr][nc]);
+                int nextEffort = currEffort > diff ? currEffort : diff;
+                
+                // Relaxation step
+                if (nextEffort < effort[nr][nc]) {
+                    effort[nr][nc] = nextEffort;
+                    push(heap, nr, nc, nextEffort);
+                }
+            }
+        }
+    }
+    
+    // Fallback cleanup (should theoretically be unreachable due to problem guarantee)
+    for (int i = 0; i < rows; i++) free(effort[i]);
+    free(effort);
+    free(heap->data);
+    free(heap);
+    
+    return 0;
+}

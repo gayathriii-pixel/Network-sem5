@@ -1,0 +1,101 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+
+// Structure to store which routes a specific stop belongs to
+typedef struct {
+    int* route_ids;
+    int size;
+    int capacity;
+} StopToRoutes;
+
+int numBusesToDestination(int** routes, int routesSize, int* routesColSize, int source, int target) {
+    if (source == target) return 0;
+
+    // Find the maximum stop ID to allocate our mapping array
+    int maxStop = 0;
+    for (int i = 0; i < routesSize; i++) {
+        for (int j = 0; j < routesColSize[i]; j++) {
+            if (routes[i][j] > maxStop) {
+                maxStop = routes[i][j];
+            }
+        }
+    }
+    
+    // If source or target are outside the range of given stops, it's impossible
+    if (source > maxStop || target > maxStop) return -1;
+
+    // Map each stop to its routes
+    StopToRoutes* stopMap = (StopToRoutes*)calloc(maxStop + 1, sizeof(StopToRoutes));
+    for (int i = 0; i < routesSize; i++) {
+        for (int j = 0; j < routesColSize[i]; j++) {
+            int stop = routes[i][j];
+            if (stopMap[stop].size == stopMap[stop].capacity) {
+                stopMap[stop].capacity = stopMap[stop].capacity == 0 ? 4 : stopMap[stop].capacity * 2;
+                stopMap[stop].route_ids = (int*)realloc(stopMap[stop].route_ids, stopMap[stop].capacity * sizeof(int));
+            }
+            stopMap[stop].route_ids[stopMap[stop].size++] = i;
+        }
+    }
+
+    // BFS Queue Setup
+    int* queue = (int*)malloc(routesSize * sizeof(int));
+    bool* visitedRoutes = (bool*)calloc(routesSize, sizeof(bool));
+    int head = 0, tail = 0;
+
+    // Initialize BFS by adding all routes passing through the 'source' stop
+    for (int i = 0; i < stopMap[source].size; i++) {
+        int route = stopMap[source].route_ids[i];
+        visitedRoutes[route] = true;
+        queue[tail++] = route;
+    }
+
+    int busCount = 1;
+
+    // Begin BFS Layer by Layer
+    while (head < tail) {
+        int levelSize = tail - head;
+        
+        for (int i = 0; i < levelSize; i++) {
+            int currRoute = queue[head++];
+
+            // Check if target stop is in the current route
+            for (int j = 0; j < routesColSize[currRoute]; j++) {
+                if (routes[currRoute][j] == target) {
+                    // Free allocated memory before returning
+                    for (int k = 0; k <= maxStop; k++) {
+                        if (stopMap[k].route_ids) free(stopMap[k].route_ids);
+                    }
+                    free(stopMap);
+                    free(queue);
+                    free(visitedRoutes);
+                    return busCount;
+                }
+            }
+
+            // Expand to neighboring routes through common stops
+            for (int j = 0; j < routesColSize[currRoute]; j++) {
+                int stop = routes[currRoute][j];
+                for (int k = 0; k < stopMap[stop].size; k++) {
+                    int nextRoute = stopMap[stop].route_ids[k];
+                    if (!visitedRoutes[nextRoute]) {
+                        visitedRoutes[nextRoute] = true;
+                        queue[tail++] = nextRoute;
+                    }
+                }
+            }
+        }
+        busCount++;
+    }
+
+    // Clean up allocated memory if target is unreachable
+    for (int k = 0; k <= maxStop; k++) {
+        if (stopMap[k].route_ids) free(stopMap[k].route_ids);
+    }
+    free(stopMap);
+    free(queue);
+    free(visitedRoutes);
+
+    return -1;
+}
