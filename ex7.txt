@@ -1,0 +1,2858 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+#define MAX_CLIENTS 100
+
+
+/*========================================
+        CLIENT STRUCTURE
+========================================*/
+
+struct Client
+{
+    struct sockaddr_in address;
+    int id;
+    int active;
+    int waiting;
+    int finished;
+};
+
+
+/*========================================
+        FUNCTION DECLARATIONS
+========================================*/
+
+int createSocket();
+
+void bindSocket(int serverSocket,
+                struct sockaddr_in *serverAddr);
+
+int findClient(struct Client clients[],
+               int clientCount,
+               struct sockaddr_in *clientAddr);
+
+int addClient(struct Client clients[],
+              int *clientCount,
+              struct sockaddr_in *clientAddr);
+
+void sendMessage(int serverSocket,
+                 char message[],
+                 struct sockaddr_in *clientAddr);
+
+int findNextClient(struct Client clients[],
+                   int clientCount);
+
+void chat(int serverSocket);
+
+
+/*========================================
+        CREATE SOCKET
+========================================*/
+
+int createSocket()
+{
+    int sock;
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if(sock < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    printf("UDP Server socket created successfully\n");
+
+    return sock;
+}
+
+
+/*========================================
+        BIND SOCKET
+========================================*/
+
+void bindSocket(int serverSocket,
+                struct sockaddr_in *serverAddr)
+{
+    int option = 1;
+
+    setsockopt(serverSocket,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &option,
+               sizeof(option));
+
+
+    memset(serverAddr,
+           0,
+           sizeof(*serverAddr));
+
+
+    serverAddr->sin_family = AF_INET;
+
+    serverAddr->sin_addr.s_addr =
+        INADDR_ANY;
+
+    serverAddr->sin_port =
+        htons(PORT);
+
+
+    if(bind(serverSocket,
+            (struct sockaddr *)serverAddr,
+            sizeof(*serverAddr)) < 0)
+    {
+        perror("Bind failed");
+
+        close(serverSocket);
+
+        exit(1);
+    }
+
+
+    printf("Server is bound to port %d\n",
+           PORT);
+}
+
+
+/*========================================
+        FIND EXISTING CLIENT
+========================================*/
+
+int findClient(struct Client clients[],
+               int clientCount,
+               struct sockaddr_in *clientAddr)
+{
+    int i;
+
+    for(i = 0; i < clientCount; i++)
+    {
+        if(clients[i].address.sin_addr.s_addr ==
+           clientAddr->sin_addr.s_addr &&
+           clients[i].address.sin_port ==
+           clientAddr->sin_port)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+
+/*========================================
+        ADD NEW CLIENT
+========================================*/
+
+int addClient(struct Client clients[],
+              int *clientCount,
+              struct sockaddr_in *clientAddr)
+{
+    int index;
+
+    if(*clientCount >= MAX_CLIENTS)
+        return -1;
+
+
+    index = *clientCount;
+
+
+    clients[index].address =
+        *clientAddr;
+
+    clients[index].id =
+        index + 1;
+
+    clients[index].active = 1;
+
+    clients[index].waiting = 1;
+
+    clients[index].finished = 0;
+
+
+    (*clientCount)++;
+
+
+    return index;
+}
+
+
+/*========================================
+        SEND MESSAGE
+========================================*/
+
+void sendMessage(int serverSocket,
+                 char message[],
+                 struct sockaddr_in *clientAddr)
+{
+    sendto(serverSocket,
+           message,
+           strlen(message),
+           0,
+           (struct sockaddr *)clientAddr,
+           sizeof(*clientAddr));
+}
+
+
+/*========================================
+        FIND NEXT WAITING CLIENT
+========================================*/
+
+int findNextClient(struct Client clients[],
+                   int clientCount)
+{
+    int i;
+
+    for(i = 0; i < clientCount; i++)
+    {
+        if(clients[i].active == 1 &&
+           clients[i].waiting == 1 &&
+           clients[i].finished == 0)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+
+/*========================================
+              CHAT
+========================================*/
+
+void chat(int serverSocket)
+{
+    struct Client clients[MAX_CLIENTS];
+
+    int clientCount = 0;
+
+    int currentClient = -1;
+
+    int totalFinished = 0;
+
+
+    char buffer[BUFFER_SIZE];
+
+    char reply[BUFFER_SIZE];
+
+
+    struct sockaddr_in clientAddr;
+
+    socklen_t clientAddrLen;
+
+
+    while(1)
+    {
+        /*
+         * Receive message from any client
+         */
+
+        clientAddrLen =
+            sizeof(clientAddr);
+
+
+        memset(buffer,
+               0,
+               sizeof(buffer));
+
+
+        int bytesReceived =
+            recvfrom(serverSocket,
+                     buffer,
+                     BUFFER_SIZE - 1,
+                     0,
+                     (struct sockaddr *)&clientAddr,
+                     &clientAddrLen);
+
+
+        if(bytesReceived < 0)
+        {
+            perror("Receive failed");
+            continue;
+        }
+
+
+        buffer[bytesReceived] = '\0';
+
+
+        /*====================================
+             CHECK WHETHER CLIENT EXISTS
+        ====================================*/
+
+        int index =
+            findClient(clients,
+                       clientCount,
+                       &clientAddr);
+
+
+        /*====================================
+              NEW CLIENT
+        ====================================*/
+
+        if(index == -1)
+        {
+            index =
+                addClient(clients,
+                          &clientCount,
+                          &clientAddr);
+
+
+            if(index == -1)
+            {
+                strcpy(reply,
+                       "Server full.");
+
+                sendMessage(serverSocket,
+                            reply,
+                            &clientAddr);
+
+                continue;
+            }
+
+
+            printf("\nClient %d connected.\n",
+                   clients[index].id);
+
+
+            /*
+             * If no client is currently chatting,
+             * this client becomes active.
+             */
+
+            if(currentClient == -1)
+            {
+                currentClient = index;
+
+                clients[index].waiting = 0;
+
+                strcpy(reply,
+                       "START");
+
+                sendMessage(serverSocket,
+                            reply,
+                            &clientAddr);
+
+
+                printf("Client %d is now chatting with server.\n",
+                       clients[index].id);
+            }
+            else
+            {
+                /*
+                 * Another client is already chatting.
+                 */
+
+                strcpy(reply,
+                       "WAIT");
+
+                sendMessage(serverSocket,
+                            reply,
+                            &clientAddr);
+
+
+                printf("Client %d is waiting.\n",
+                       clients[index].id);
+            }
+
+
+            continue;
+        }
+
+
+        /*====================================
+          CLIENT IS NOT CURRENTLY ACTIVE
+        ====================================*/
+
+        if(index != currentClient)
+        {
+            /*
+             * Client may send another CONNECT
+             * while waiting.
+             */
+
+            if(strcmp(buffer, "CONNECT") == 0)
+            {
+                strcpy(reply, "WAIT");
+
+                sendMessage(serverSocket,
+                            reply,
+                            &clients[index].address);
+            }
+
+            continue;
+        }
+
+
+        /*====================================
+              CURRENT CLIENT MESSAGE
+        ====================================*/
+
+        printf("\nClient %d: %s\n",
+               clients[index].id,
+               buffer);
+
+
+        /*====================================
+                CLIENT SAYS BYE
+        ====================================*/
+
+        if(strcmp(buffer, "bye") == 0)
+        {
+            strcpy(reply, "bye");
+
+            sendMessage(serverSocket,
+                        reply,
+                        &clients[index].address);
+
+
+            printf("Client %d disconnected.\n",
+                   clients[index].id);
+
+
+            clients[index].active = 0;
+
+            clients[index].waiting = 0;
+
+            clients[index].finished = 1;
+
+
+            currentClient = -1;
+
+            totalFinished++;
+
+
+            /*
+             * Check for next waiting client
+             */
+
+            currentClient =
+                findNextClient(clients,
+                               clientCount);
+
+
+            if(currentClient != -1)
+            {
+                clients[currentClient].waiting = 0;
+
+
+                strcpy(reply,
+                       "START");
+
+                sendMessage(
+                    serverSocket,
+                    reply,
+                    &clients[currentClient].address
+                );
+
+
+                printf("Client %d is now chatting with server.\n",
+                       clients[currentClient].id);
+            }
+
+
+            /*
+             * All clients finished
+             */
+
+            if(totalFinished == clientCount)
+            {
+                printf("\nAll clients have finished.\n");
+
+                break;
+            }
+
+
+            continue;
+        }
+
+
+        /*====================================
+              SERVER REPLY
+        ====================================*/
+
+        printf("Reply to Client %d: ",
+               clients[index].id);
+
+        fflush(stdout);
+
+
+        fgets(reply,
+              BUFFER_SIZE,
+              stdin);
+
+
+        reply[strcspn(reply, "\n")] = '\0';
+
+
+        sendMessage(
+            serverSocket,
+            reply,
+            &clients[index].address
+        );
+
+
+        /*====================================
+             SERVER ALSO SAYS BYE
+        ====================================*/
+
+        if(strcmp(reply, "bye") == 0)
+        {
+            printf("Chat ended with Client %d.\n",
+                   clients[index].id);
+
+
+            clients[index].active = 0;
+
+            clients[index].waiting = 0;
+
+            clients[index].finished = 1;
+
+
+            currentClient = -1;
+
+            totalFinished++;
+
+
+            currentClient =
+                findNextClient(clients,
+                               clientCount);
+
+
+            if(currentClient != -1)
+            {
+                clients[currentClient].waiting = 0;
+
+
+                strcpy(reply,
+                       "START");
+
+
+                sendMessage(
+                    serverSocket,
+                    reply,
+                    &clients[currentClient].address
+                );
+
+
+                printf("Client %d is now chatting with server.\n",
+                       clients[currentClient].id);
+            }
+
+
+            if(totalFinished == clientCount)
+            {
+                printf("\nAll clients have finished.\n");
+
+                break;
+            }
+        }
+    }
+}
+
+
+/*========================================
+                MAIN
+========================================*/
+
+int main()
+{
+    int serverSocket;
+
+    struct sockaddr_in serverAddr;
+
+
+    printf("====================================\n");
+    printf("       UDP MULTI CLIENT SERVER\n");
+    printf("====================================\n");
+
+
+    serverSocket =
+        createSocket();
+
+
+    bindSocket(serverSocket,
+               &serverAddr);
+
+
+    printf("\nServer is waiting for clients...\n");
+    printf("Multiple clients can connect.\n");
+    printf("Only one client chats at a time.\n");
+    printf("------------------------------------\n");
+
+
+    chat(serverSocket);
+
+
+    close(serverSocket);
+
+
+    printf("\nServer closed.\n");
+
+
+    return 0;
+}
+[24bcs135@mepcolinux iterative]$cat chatclient.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+
+/*========================================
+        FUNCTION DECLARATIONS
+========================================*/
+
+int createSocket();
+
+void setServerAddress(
+    struct sockaddr_in *serverAddr
+);
+
+void sendMessage(
+    int clientSocket,
+    char message[],
+    struct sockaddr_in *serverAddr
+);
+
+int receiveMessage(
+    int clientSocket,
+    char buffer[],
+    struct sockaddr_in *serverAddr
+);
+
+void waitForTurn(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+);
+
+void chat(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+);
+
+
+/*========================================
+        CREATE SOCKET
+========================================*/
+
+int createSocket()
+{
+    int sock;
+
+
+    sock = socket(
+        AF_INET,
+        SOCK_DGRAM,
+        0
+    );
+
+
+    if(sock < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+
+    printf("UDP Client socket created successfully\n");
+
+
+    return sock;
+}
+
+
+/*========================================
+        SERVER ADDRESS
+========================================*/
+
+void setServerAddress(
+    struct sockaddr_in *serverAddr
+)
+{
+    char serverIP[50];
+
+
+    memset(
+        serverAddr,
+        0,
+        sizeof(*serverAddr)
+    );
+
+
+    printf("Enter Server IP Address: ");
+
+    scanf(
+        "%49s",
+        serverIP
+    );
+
+
+    serverAddr->sin_family =
+        AF_INET;
+
+
+    serverAddr->sin_port =
+        htons(PORT);
+
+
+    if(inet_pton(
+            AF_INET,
+            serverIP,
+            &serverAddr->sin_addr
+        ) <= 0)
+    {
+        printf("Invalid IP address.\n");
+
+        exit(1);
+    }
+
+
+    getchar();
+}
+
+
+/*========================================
+             SEND MESSAGE
+========================================*/
+
+void sendMessage(
+    int clientSocket,
+    char message[],
+    struct sockaddr_in *serverAddr
+)
+{
+    sendto(
+        clientSocket,
+        message,
+        strlen(message),
+        0,
+        (struct sockaddr *)serverAddr,
+        sizeof(*serverAddr)
+    );
+}
+
+
+/*========================================
+           RECEIVE MESSAGE
+========================================*/
+
+int receiveMessage(
+    int clientSocket,
+    char buffer[],
+    struct sockaddr_in *serverAddr
+)
+{
+    socklen_t serverAddrLen;
+
+    int bytesReceived;
+
+
+    serverAddrLen =
+        sizeof(*serverAddr);
+
+
+    memset(
+        buffer,
+        0,
+        BUFFER_SIZE
+    );
+
+
+    bytesReceived =
+        recvfrom(
+            clientSocket,
+            buffer,
+            BUFFER_SIZE - 1,
+            0,
+            (struct sockaddr *)serverAddr,
+            &serverAddrLen
+        );
+
+
+    if(bytesReceived < 0)
+    {
+        perror("Receive failed");
+
+        return 0;
+    }
+
+
+    buffer[bytesReceived] =
+        '\0';
+
+
+    return 1;
+}
+
+
+/*========================================
+             WAIT FOR TURN
+========================================*/
+
+void waitForTurn(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+)
+{
+    char buffer[BUFFER_SIZE];
+
+
+    /*
+     * Tell server that
+     * this client wants to connect.
+     */
+
+    sendMessage(
+        clientSocket,
+        "CONNECT",
+        serverAddr
+    );
+
+
+    while(1)
+    {
+        receiveMessage(
+            clientSocket,
+            buffer,
+            serverAddr
+        );
+
+
+        if(strcmp(buffer, "START") == 0)
+        {
+            printf("\nServer selected this client.\n");
+
+            printf("You can now chat with server.\n");
+
+            printf("------------------------------------\n");
+
+            break;
+        }
+
+
+        if(strcmp(buffer, "WAIT") == 0)
+        {
+            printf("\nClient is waiting for its turn...\n");
+
+
+            /*
+             * Wait for server to send START.
+             */
+
+            while(1)
+            {
+                receiveMessage(
+                    clientSocket,
+                    buffer,
+                    serverAddr
+                );
+
+
+                if(strcmp(buffer, "START") == 0)
+                {
+                    printf("\nYour turn started!\n");
+
+                    printf("You can now chat with server.\n");
+
+                    printf("------------------------------------\n");
+
+                    return;
+                }
+            }
+        }
+    }
+}
+
+
+/*========================================
+                CHAT
+========================================*/
+
+void chat(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+)
+{
+    char buffer[BUFFER_SIZE];
+
+
+    while(1)
+    {
+        printf("\nClient: ");
+
+        fflush(stdout);
+
+
+        fgets(
+            buffer,
+            BUFFER_SIZE,
+            stdin
+        );
+
+
+        buffer[strcspn(
+            buffer,
+            "\n"
+        )] = '\0';
+
+
+        sendMessage(
+            clientSocket,
+            buffer,
+            serverAddr
+        );
+
+
+        /*
+         * Client says bye
+         */
+
+        if(strcmp(buffer, "bye") == 0)
+        {
+            printf("\nChat ended by client.\n");
+
+            break;
+        }
+
+
+        /*
+         * Receive server reply
+         */
+
+        receiveMessage(
+            clientSocket,
+            buffer,
+            serverAddr
+        );
+
+
+        printf("Server: %s\n",
+               buffer);
+
+
+        /*
+         * Server says bye
+         */
+
+        if(strcmp(buffer, "bye") == 0)
+        {
+            printf("\nServer ended the chat.\n");
+
+            break;
+        }
+    }
+}
+
+
+/*========================================
+                MAIN
+========================================*/
+
+int main()
+{
+    int clientSocket;
+
+    struct sockaddr_in serverAddr;
+
+
+    printf("====================================\n");
+    printf("           UDP CHAT CLIENT\n");
+    printf("====================================\n");
+
+
+    clientSocket =
+        createSocket();
+
+
+    setServerAddress(
+        &serverAddr
+    );
+
+
+    printf("\nConnecting to UDP server...\n");
+
+
+    /*
+     * Wait until server gives
+     * this client permission to chat.
+     */
+
+    waitForTurn(
+        clientSocket,
+        &serverAddr
+    );
+
+
+    chat(
+        clientSocket,
+        &serverAddr
+    );
+
+
+    close(clientSocket);
+
+
+    printf("\nClient closed.\n");
+
+
+    return 0;
+}
+[24bcs135@mepcolinux iterative]$./chatserver
+====================================
+       UDP MULTI CLIENT SERVER
+====================================
+UDP Server socket created successfully
+Server is bound to port 8080
+
+Server is waiting for clients...
+Multiple clients can connect.
+Only one client chats at a time.
+------------------------------------
+
+Client 1 connected.
+Client 1 is now chatting with server.
+
+Client 1: hii
+Reply to Client 1: hello
+
+Client 1: bye
+Client 1 disconnected.
+
+All clients have finished.
+
+Server closed.
+[24bcs135@mepcolinux iterative]$cat dhcpserver.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 8888
+#define MAX_SUBNETS 32
+
+typedef struct {
+    int hosts;
+    int prefix;
+    int subnet_count;
+} DHCPRequest;
+
+typedef struct {
+    int subnet_no;
+} SubnetRequest;
+
+typedef struct {
+    char network[32];
+    char assigned_ip[32];
+    char last_ip[32];
+    char broadcast[32];
+    char status[32];
+} DHCPResponse;
+
+typedef struct {
+    unsigned int network;
+    unsigned int first_ip;
+    unsigned int last_ip;
+    unsigned int broadcast;
+    unsigned int next_ip;
+    int assigned;
+} SubnetInfo;
+
+SubnetInfo subnet_pool[MAX_SUBNETS];
+
+int pool_initialized = 0;
+int old_hosts = 0;
+int old_prefix = 0;
+int old_subnet_count = 0;
+
+unsigned int ip_to_uint(const char *ip) {
+    unsigned int a, b, c, d;
+
+    if (sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
+        return 0;
+    }
+
+    return (a << 24) | (b << 16) | (c << 8) | d;
+}
+
+void uint_to_ip(unsigned int ip, char *buffer) {
+    sprintf(buffer,
+            "%u.%u.%u.%u",
+            (ip >> 24) & 255,
+            (ip >> 16) & 255,
+            (ip >> 8) & 255,
+            ip & 255);
+}
+
+int next_power_of_two(int value) {
+    int power = 1;
+
+    while (power < value) {
+        power = power * 2;
+    }
+
+    return power;
+}
+
+int power_number(int value) {
+    int power = 0;
+
+    while (value > 1) {
+        value = value / 2;
+        power++;
+    }
+
+    return power;
+}
+
+void create_subnet_pool(int hosts, int prefix, int subnet_count) {
+    int address_block;
+    int base_subnet_size;
+    int remainder;
+    int i;
+
+    unsigned int base_network;
+    unsigned int current_network;
+
+    address_block = next_power_of_two(hosts);
+
+    /*
+     * Demo base network.
+     * Prefix /24 means:
+     * 192.168.1.0 to 192.168.1.255
+     */
+    base_network = ip_to_uint("192.168.1.0");
+    current_network = base_network;
+
+    base_subnet_size = address_block / subnet_count;
+    remainder = address_block % subnet_count;
+
+    /*
+     * If subnet count is greater than address block,
+     * give one address to each subnet.
+     */
+    if (base_subnet_size == 0) {
+        base_subnet_size = 1;
+        remainder = 0;
+    }
+
+    for (i = 0; i < subnet_count; i++) {
+        int subnet_size;
+
+        subnet_size = base_subnet_size;
+
+        /*
+         * Remaining addresses are added
+         * to the last subnet.
+         */
+        if (i == subnet_count - 1) {
+            subnet_size = subnet_size + remainder;
+        }
+
+        subnet_pool[i].network = current_network;
+        subnet_pool[i].broadcast =
+            current_network + subnet_size - 1;
+
+        /*
+         * Network IP and broadcast IP are reserved.
+         */
+        if (subnet_size >= 2) {
+            subnet_pool[i].first_ip =
+                subnet_pool[i].network + 1;
+
+            subnet_pool[i].last_ip =
+                subnet_pool[i].broadcast - 1;
+
+            subnet_pool[i].next_ip =
+                subnet_pool[i].first_ip;
+        } else {
+            subnet_pool[i].first_ip =
+                subnet_pool[i].network;
+
+            subnet_pool[i].last_ip =
+                subnet_pool[i].network;
+
+            subnet_pool[i].next_ip =
+                subnet_pool[i].network;
+        }
+
+        subnet_pool[i].assigned = 0;
+
+        current_network =
+            current_network + subnet_size;
+    }
+
+    old_hosts = hosts;
+    old_prefix = prefix;
+    old_subnet_count = subnet_count;
+    pool_initialized = 1;
+}
+
+void print_address_calculation(int hosts,
+                               int prefix,
+                               int subnet_count) {
+    int address_block;
+    int power;
+
+    address_block = next_power_of_two(hosts);
+    power = power_number(address_block);
+
+    printf("\n[ADDRESS CALCULATION]\n");
+    printf("Host requirement       : %d\n", hosts);
+    printf("Next Power of 2        : 2^%d = %d\n",
+           power,
+           address_block);
+    printf("Address block          : %d\n", address_block);
+    printf("Original prefix        : /%d\n", prefix);
+    printf("Subnets needed         : %d\n", subnet_count);
+}
+
+void print_subnet_pool(int subnet_count) {
+    int i;
+
+    char network[32];
+    char first_ip[32];
+    char last_ip[32];
+
+    printf("\n[SUBNET POOL]\n");
+
+    for (i = 0; i < subnet_count; i++) {
+        uint_to_ip(subnet_pool[i].network, network);
+        uint_to_ip(subnet_pool[i].first_ip, first_ip);
+        uint_to_ip(subnet_pool[i].last_ip, last_ip);
+
+        printf("Subnet %d : %s\n",
+               i + 1,
+               subnet_pool[i].assigned ?
+               "ASSIGNED" : "AVAILABLE");
+
+        printf("   Network : %s\n", network);
+        printf("   Range   : %s - %s\n",
+               first_ip,
+               last_ip);
+    }
+}
+
+void print_pool_status(int subnet_count) {
+    int i;
+
+    printf("\n[POOL STATUS]\n");
+
+    for (i = 0; i < subnet_count; i++) {
+        printf("Subnet %d -> %s\n",
+               i + 1,
+               subnet_pool[i].assigned ?
+               "ASSIGNED" : "AVAILABLE");
+    }
+}
+
+int create_response(int subnet_no,
+                    DHCPResponse *response) {
+    SubnetInfo *subnet;
+
+    char network[32];
+    char assigned_ip[32];
+    char last_ip[32];
+    char broadcast[32];
+
+    memset(response, 0, sizeof(DHCPResponse));
+
+    if (subnet_no < 1 ||
+        subnet_no > old_subnet_count) {
+        strcpy(response->status, "INVALID SUBNET");
+        return -1;
+    }
+
+    subnet = &subnet_pool[subnet_no - 1];
+
+    if (subnet->next_ip > subnet->last_ip) {
+        strcpy(response->status, "NO IP AVAILABLE");
+        return -1;
+    }
+
+    uint_to_ip(subnet->network, network);
+    uint_to_ip(subnet->next_ip, assigned_ip);
+    uint_to_ip(subnet->last_ip, last_ip);
+    uint_to_ip(subnet->broadcast, broadcast);
+
+    strcpy(response->network, network);
+    strcpy(response->assigned_ip, assigned_ip);
+    strcpy(response->last_ip, last_ip);
+    strcpy(response->broadcast, broadcast);
+    strcpy(response->status, "SUCCESS");
+
+    /*
+     * Mark subnet as assigned.
+     */
+    subnet->assigned = 1;
+
+    /*
+     * Next client gets the next IP.
+     */
+    subnet->next_ip++;
+
+    return 0;
+}
+
+int main() {
+    int server_socket;
+    int client_socket;
+    int option = 1;
+
+    struct sockaddr_in server_address;
+    struct sockaddr_in client_address;
+    socklen_t client_length;
+
+    DHCPRequest request;
+    SubnetRequest subnet_request;
+    DHCPResponse response;
+
+    char ready_message[] = "READY";
+
+    server_socket = socket(AF_INET,
+                           SOCK_STREAM,
+                           0);
+
+    if (server_socket < 0) {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    setsockopt(server_socket,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &option,
+               sizeof(option));
+
+    memset(&server_address,
+           0,
+           sizeof(server_address));
+
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = INADDR_ANY;
+    server_address.sin_port = htons(PORT);
+
+    if (bind(server_socket,
+             (struct sockaddr *)&server_address,
+             sizeof(server_address)) < 0) {
+        perror("Bind failed");
+        close(server_socket);
+        return 1;
+    }
+
+    if (listen(server_socket, 10) < 0) {
+        perror("Listen failed");
+        close(server_socket);
+        return 1;
+    }
+
+    printf("\n+------------------------------------------+\n");
+    printf("|              DHCP SERVER                 |\n");
+    printf("+------------------------------------------+\n");
+    printf("[OK] Server socket created.\n");
+    printf("[OK] DHCP service started.\n");
+    printf("[INFO] Port : %d\n", PORT);
+    printf("[INFO] Mode : ITERATIVE\n");
+    printf("[WAIT] Waiting for client requests...\n");
+
+    while (1) {
+        client_length = sizeof(client_address);
+
+        client_socket = accept(
+            server_socket,
+            (struct sockaddr *)&client_address,
+            &client_length
+        );
+
+        if (client_socket < 0) {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("\n******** CLIENT SESSION ********\n");
+        printf("[+] Client IP   : %s\n",
+               inet_ntoa(client_address.sin_addr));
+        printf("[+] Client Port : %d\n",
+               ntohs(client_address.sin_port));
+        printf("********************************\n");
+
+        memset(&request, 0, sizeof(request));
+
+        if (recv(client_socket,
+                 &request,
+                 sizeof(request),
+                 0) <= 0) {
+            printf("[ERROR] Request receive failed.\n");
+            close(client_socket);
+            continue;
+        }
+
+        printf("\n[REQUEST DETAILS]\n");
+        printf("Hosts requested : %d\n", request.hosts);
+        printf("Network prefix  : /%d\n", request.prefix);
+        printf("Subnets needed  : %d\n",
+               request.subnet_count);
+
+        if (request.hosts <= 0 ||
+            request.subnet_count <= 0 ||
+            request.subnet_count > MAX_SUBNETS) {
+            printf("[ERROR] Invalid request.\n");
+            close(client_socket);
+            continue;
+        }
+
+        /*
+         * Create pool only when configuration changes.
+         * Therefore, a second client requesting the same
+         * subnet receives the next available IP.
+         */
+        if (!pool_initialized ||
+            old_hosts != request.hosts ||
+            old_prefix != request.prefix ||
+            old_subnet_count != request.subnet_count) {
+
+            create_subnet_pool(request.hosts,
+                               request.prefix,
+                               request.subnet_count);
+        }
+
+        print_address_calculation(request.hosts,
+                                  request.prefix,
+                                  request.subnet_count);
+
+        print_subnet_pool(request.subnet_count);
+
+        send(client_socket,
+             ready_message,
+             strlen(ready_message) + 1,
+             0);
+
+        memset(&subnet_request,
+               0,
+               sizeof(subnet_request));
+
+        if (recv(client_socket,
+                 &subnet_request,
+                 sizeof(subnet_request),
+                 0) <= 0) {
+            printf("[ERROR] Subnet request receive failed.\n");
+            close(client_socket);
+            continue;
+        }
+
+        printf("\n[SUBNET REQUEST]\n");
+        printf("Client selected subnet : %d\n",
+               subnet_request.subnet_no);
+
+        printf("\n========== IP ALLOCATION ==========\n");
+
+        if (subnet_request.subnet_no >= 1 &&
+            subnet_request.subnet_no <= request.subnet_count) {
+
+            SubnetInfo *subnet;
+            char network[32];
+            char assigned_ip[32];
+            char last_ip[32];
+            char broadcast[32];
+
+            subnet =
+                &subnet_pool[subnet_request.subnet_no - 1];
+
+            uint_to_ip(subnet->network, network);
+            uint_to_ip(subnet->next_ip, assigned_ip);
+            uint_to_ip(subnet->last_ip, last_ip);
+            uint_to_ip(subnet->broadcast, broadcast);
+
+            printf("Subnet ID      : %d\n",
+                   subnet_request.subnet_no);
+            printf("Network        : %s\n", network);
+            printf("Assigned IP    : %s\n", assigned_ip);
+            printf("Last IP        : %s\n", last_ip);
+            printf("Broadcast      : %s\n", broadcast);
+        }
+
+        printf("===================================\n");
+
+        create_response(subnet_request.subnet_no,
+                        &response);
+
+        send(client_socket,
+             &response,
+             sizeof(response),
+             0);
+
+        if (strcmp(response.status, "SUCCESS") == 0) {
+            printf("[OK] DHCP ACK delivered.\n");
+        } else {
+            printf("[ERROR] Allocation failed: %s\n",
+                   response.status);
+        }
+
+        print_pool_status(request.subnet_count);
+
+        printf("\n[OK] Client session completed.\n");
+        printf("[WAIT] Server is ready for the next client.\n");
+
+        close(client_socket);
+    }
+
+    close(server_socket);
+
+    return 0;
+}
+[24bcs135@mepcolinux iterative]$cat dhcpclient.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 8888
+
+typedef struct {
+    int hosts;
+    int prefix;
+    int subnet_count;
+} DHCPRequest;
+
+typedef struct {
+    int subnet_no;
+} SubnetRequest;
+
+typedef struct {
+    char network[32];
+    char first_ip[32];
+    char last_ip[32];
+    char broadcast[32];
+    char status[32];
+} DHCPResponse;
+
+int main() {
+    int client_socket;
+    struct sockaddr_in server_address;
+    char server_ip[64];
+    char ready_message[16];
+
+    DHCPRequest request;
+    SubnetRequest subnet_request;
+    DHCPResponse response;
+
+    printf("\n+------------------------------------------+\n");
+    printf("|              DHCP CLIENT                 |\n");
+    printf("+------------------------------------------+\n");
+
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (client_socket < 0) {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    printf("[OK] Client socket created.\n");
+
+    printf("Enter DHCP Server IP : ");
+    scanf("%63s", server_ip);
+
+    memset(&server_address, 0, sizeof(server_address));
+
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(PORT);
+
+    if (inet_pton(AF_INET,
+                  server_ip,
+                  &server_address.sin_addr) <= 0) {
+        printf("[ERROR] Invalid server IP.\n");
+        close(client_socket);
+        return 1;
+    }
+
+    if (connect(client_socket,
+                (struct sockaddr *)&server_address,
+                sizeof(server_address)) < 0) {
+        perror("Connection failed");
+        close(client_socket);
+        return 1;
+    }
+
+    printf("[OK] Connected to DHCP server.\n");
+
+    printf("\n------- NETWORK REQUIREMENTS -------\n");
+
+    printf("Enter Number of Hosts : ");
+    scanf("%d", &request.hosts);
+
+    printf("Enter Prefix          : ");
+    scanf("%d", &request.prefix);
+
+    printf("Enter Number of Subnets : ");
+    scanf("%d", &request.subnet_count);
+
+    send(client_socket,
+         &request,
+         sizeof(request),
+         0);
+
+    printf("\n[>] DHCP request transmitted.\n");
+
+    memset(ready_message, 0, sizeof(ready_message));
+
+    recv(client_socket,
+         ready_message,
+         sizeof(ready_message),
+         0);
+
+    printf("[<] Server is ready for subnet selection.\n");
+
+    printf("\n------- SUBNET SELECTION -------\n");
+
+    printf("Enter Subnet Number : ");
+    scanf("%d", &subnet_request.subnet_no);
+
+    send(client_socket,
+         &subnet_request,
+         sizeof(subnet_request),
+         0);
+
+    printf("\n[>] Subnet request sent.\n");
+
+    memset(&response, 0, sizeof(response));
+
+    if (recv(client_socket,
+             &response,
+             sizeof(response),
+             0) <= 0) {
+        printf("[ERROR] No response received from server.\n");
+        close(client_socket);
+        return 1;
+    }
+
+    printf("\n========================================\n");
+    printf("        DHCP ALLOCATION RESULT          \n");
+    printf("========================================\n");
+
+    printf("Hosts requested   : %d\n", request.hosts);
+    printf("Original Prefix   : /%d\n", request.prefix);
+    printf("Subnets requested : %d\n", request.subnet_count);
+    printf("Selected Subnet   : %d\n", subnet_request.subnet_no);
+
+    printf("\nNetwork Address   : %s\n", response.network);
+    printf("Assigned IP       : %s\n", response.first_ip);
+    printf("Last Address      : %s\n", response.last_ip);
+    printf("Broadcast Address : %s\n", response.broadcast);
+
+    printf("\nAllocation Status : %s\n", response.status);
+
+    printf("========================================\n");
+
+    if (strcmp(response.status, "SUCCESS") == 0) {
+        printf("[<] DHCP ACK received.\n");
+        printf("[OK] IP address assigned successfully.\n");
+    } else {
+        printf("[ERROR] IP address allocation failed.\n");
+    }
+
+    printf("[OK] DHCP client session completed.\n");
+
+    close(client_socket);
+
+    return 0;
+}
+[24bcs135@mepcolinux iterative]$./dhcpserver
+
++------------------------------------------+
+|              DHCP SERVER                 |
++------------------------------------------+
+[OK] Server socket created.
+[OK] DHCP service started.
+[INFO] Port : 8888
+[INFO] Mode : ITERATIVE
+[WAIT] Waiting for client requests...
+
+******** CLIENT SESSION ********
+[+] Client IP   : 172.16.16.200
+[+] Client Port : 58590
+********************************
+
+[REQUEST DETAILS]
+Hosts requested : 50
+Network prefix  : /24
+Subnets needed  : 3
+
+[ADDRESS CALCULATION]
+Host requirement       : 50
+Next Power of 2        : 2^6 = 64
+Address block          : 64
+Original prefix        : /24
+Subnets needed         : 3
+
+[SUBNET POOL]
+Subnet 1 : AVAILABLE
+   Network : 192.168.1.0
+   Range   : 192.168.1.1 - 192.168.1.19
+Subnet 2 : AVAILABLE
+   Network : 192.168.1.21
+   Range   : 192.168.1.22 - 192.168.1.40
+Subnet 3 : AVAILABLE
+   Network : 192.168.1.42
+   Range   : 192.168.1.43 - 192.168.1.62
+
+[SUBNET REQUEST]
+Client selected subnet : 3
+
+========== IP ALLOCATION ==========
+Subnet ID      : 3
+Network        : 192.168.1.42
+Assigned IP    : 192.168.1.43
+Last IP        : 192.168.1.62
+Broadcast      : 192.168.1.63
+===================================
+[OK] DHCP ACK delivered.
+
+[POOL STATUS]
+Subnet 1 -> AVAILABLE
+Subnet 2 -> AVAILABLE
+Subnet 3 -> ASSIGNED
+
+[OK] Client session completed.
+[WAIT] Server is ready for the next client.
+^Z
+[1]+  Stopped                 ./dhcpserver
+[24bcs135@mepcolinux iterative]$cat dnsserver.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+
+#define PORT 8082
+#define BUFFER_SIZE 1024
+#define MAX_CLIENTS 100
+
+/*--------------------------------------------------*/
+/* Client Structure */
+/*--------------------------------------------------*/
+
+struct Client
+{
+    struct sockaddr_in address;
+    int id;
+    int active;
+    int waiting;
+    int finished;
+};
+
+/*--------------------------------------------------*/
+/* Function Declarations */
+/*--------------------------------------------------*/
+
+int createSocket();
+
+void bindSocket(
+    int serverSocket,
+    struct sockaddr_in *serverAddr
+);
+
+int findClient(
+    struct Client clients[],
+    int clientCount,
+    struct sockaddr_in *clientAddr
+);
+
+void receiveMessage(
+    int serverSocket,
+    char domain[],
+    struct sockaddr_in *clientAddr,
+    socklen_t *clientAddrLen
+);
+
+void sendMessage(
+    int serverSocket,
+    char message[],
+    struct sockaddr_in *clientAddr
+);
+
+void findIPAddress(
+    char domain[],
+    char ip[]
+);
+
+int findNextClient(
+    struct Client clients[],
+    int clientCount
+);
+
+void processDNS(
+    int serverSocket
+);
+
+/*--------------------------------------------------*/
+/* Create Socket */
+/*--------------------------------------------------*/
+
+int createSocket()
+{
+    int serverSocket;
+    int option = 1;
+
+    serverSocket = socket(
+        AF_INET,
+        SOCK_DGRAM,
+        0
+    );
+
+    if (serverSocket < 0)
+    {
+        printf("Socket creation failed\n");
+        exit(1);
+    }
+
+    setsockopt(
+        serverSocket,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &option,
+        sizeof(option)
+    );
+
+    printf(
+        "DNS Server socket created successfully\n"
+    );
+
+    return serverSocket;
+}
+
+/*--------------------------------------------------*/
+/* Bind Socket */
+/*--------------------------------------------------*/
+
+void bindSocket(
+    int serverSocket,
+    struct sockaddr_in *serverAddr
+)
+{
+    memset(
+        serverAddr,
+        0,
+        sizeof(*serverAddr)
+    );
+
+    serverAddr->sin_family =
+        AF_INET;
+
+    serverAddr->sin_addr.s_addr =
+        INADDR_ANY;
+
+    serverAddr->sin_port =
+        htons(PORT);
+
+    if (
+        bind(
+            serverSocket,
+            (struct sockaddr *)serverAddr,
+            sizeof(*serverAddr)
+        ) < 0
+    )
+    {
+        printf("Bind failed\n");
+
+        close(serverSocket);
+
+        exit(1);
+    }
+
+    printf(
+        "DNS Server is running on port %d\n",
+        PORT
+    );
+}
+
+/*--------------------------------------------------*/
+/* Find Existing Client */
+/*--------------------------------------------------*/
+
+int findClient(
+    struct Client clients[],
+    int clientCount,
+    struct sockaddr_in *clientAddr
+)
+{
+    int i;
+
+    for (i = 0; i < clientCount; i++)
+    {
+        if (
+            clients[i].address.sin_addr.s_addr ==
+            clientAddr->sin_addr.s_addr
+            &&
+            clients[i].address.sin_port ==
+            clientAddr->sin_port
+        )
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+/*--------------------------------------------------*/
+/* Receive Message */
+/*--------------------------------------------------*/
+
+void receiveMessage(
+    int serverSocket,
+    char domain[],
+    struct sockaddr_in *clientAddr,
+    socklen_t *clientAddrLen
+)
+{
+    int bytesReceived;
+
+    memset(
+        domain,
+        0,
+        BUFFER_SIZE
+    );
+
+    bytesReceived = recvfrom(
+        serverSocket,
+        domain,
+        BUFFER_SIZE - 1,
+        0,
+        (struct sockaddr *)clientAddr,
+        clientAddrLen
+    );
+
+    if (bytesReceived < 0)
+    {
+        printf("Receive failed\n");
+        exit(1);
+    }
+
+    domain[bytesReceived] = '\0';
+}
+
+/*--------------------------------------------------*/
+/* Send Message */
+/*--------------------------------------------------*/
+
+void sendMessage(
+    int serverSocket,
+    char message[],
+    struct sockaddr_in *clientAddr
+)
+{
+    sendto(
+        serverSocket,
+        message,
+        strlen(message) + 1,
+        0,
+        (struct sockaddr *)clientAddr,
+        sizeof(*clientAddr)
+    );
+}
+
+/*--------------------------------------------------*/
+/* Find IP Address */
+/*--------------------------------------------------*/
+
+void findIPAddress(
+    char domain[],
+    char ip[]
+)
+{
+    if (
+        strcmp(domain, "google.com") == 0
+    )
+    {
+        strcpy(
+            ip,
+            "142.250.195.14"
+        );
+    }
+
+    else if (
+        strcmp(domain, "facebook.com") == 0
+    )
+    {
+        strcpy(
+            ip,
+            "157.240.241.35"
+        );
+    }
+
+    else if (
+        strcmp(domain, "yahoo.com") == 0
+    )
+    {
+        strcpy(
+            ip,
+            "98.137.11.163"
+        );
+    }
+
+    else if (
+        strcmp(domain, "gmail.com") == 0
+    )
+    {
+        strcpy(
+            ip,
+            "142.250.195.18"
+        );
+    }
+
+    else
+    {
+        strcpy(
+            ip,
+            "Domain not found"
+        );
+    }
+}
+
+/*--------------------------------------------------*/
+/* Find Next Waiting Client */
+/*--------------------------------------------------*/
+
+int findNextClient(
+    struct Client clients[],
+    int clientCount
+)
+{
+    int i;
+
+    for (i = 0; i < clientCount; i++)
+    {
+        if (
+            clients[i].active == 1 &&
+            clients[i].waiting == 1 &&
+            clients[i].finished == 0
+        )
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+/*--------------------------------------------------*/
+/* DNS Processing */
+/*--------------------------------------------------*/
+
+void processDNS(
+    int serverSocket
+)
+{
+    struct Client clients[MAX_CLIENTS];
+
+    int clientCount = 0;
+
+    int currentClient = -1;
+
+    char domain[BUFFER_SIZE];
+
+    char ip[BUFFER_SIZE];
+
+    struct sockaddr_in clientAddr;
+
+    socklen_t clientAddrLen;
+
+    fd_set readfds;
+
+    int maxfd;
+
+
+    while (1)
+    {
+        FD_ZERO(&readfds);
+
+        FD_SET(
+            serverSocket,
+            &readfds
+        );
+
+        FD_SET(
+            STDIN_FILENO,
+            &readfds
+        );
+
+        maxfd = serverSocket;
+
+        if (STDIN_FILENO > maxfd)
+        {
+            maxfd = STDIN_FILENO;
+        }
+
+        if (
+            select(
+                maxfd + 1,
+                &readfds,
+                NULL,
+                NULL,
+                NULL
+            ) < 0
+        )
+        {
+            printf("Select failed\n");
+            break;
+        }
+
+        /*------------------------------------------*/
+        /* CLIENT MESSAGE */
+        /*------------------------------------------*/
+
+        if (
+            FD_ISSET(
+                serverSocket,
+                &readfds
+            )
+        )
+        {
+            int index;
+
+            clientAddrLen =
+                sizeof(clientAddr);
+
+            receiveMessage(
+                serverSocket,
+                domain,
+                &clientAddr,
+                &clientAddrLen
+            );
+
+            index = findClient(
+                clients,
+                clientCount,
+                &clientAddr
+            );
+
+            /*--------------------------------------*/
+            /* NEW CLIENT */
+            /*--------------------------------------*/
+
+            if (index == -1)
+            {
+                if (
+                    clientCount >= MAX_CLIENTS
+                )
+                {
+                    strcpy(
+                        ip,
+                        "Server full"
+                    );
+
+                    sendMessage(
+                        serverSocket,
+                        ip,
+                        &clientAddr
+                    );
+
+                    continue;
+                }
+
+                index = clientCount;
+
+                clients[index].address =
+                    clientAddr;
+
+                clients[index].id =
+                    clientCount + 1;
+
+                clients[index].active = 1;
+
+                clients[index].waiting = 1;
+
+                clients[index].finished = 0;
+
+                clientCount++;
+
+                printf(
+                    "\nClient %d connected.\n",
+                    clients[index].id
+                );
+            }
+
+            /*--------------------------------------*/
+            /* CONNECT */
+            /*--------------------------------------*/
+
+            if (
+                strcmp(
+                    domain,
+                    "CONNECT"
+                ) == 0
+            )
+            {
+                if (currentClient == -1)
+                {
+                    currentClient = index;
+
+                    clients[index].waiting = 0;
+
+                    sendMessage(
+                        serverSocket,
+                        "START",
+                        &clients[index].address
+                    );
+
+                    printf(
+                        "Client %d is now chatting with DNS server.\n",
+                        clients[index].id
+                    );
+                }
+
+                else if (
+                    currentClient != index
+                )
+                {
+                    clients[index].waiting = 1;
+
+                    sendMessage(
+                        serverSocket,
+                        "WAIT",
+                        &clients[index].address
+                    );
+
+                    printf(
+                        "Client %d is waiting.\n",
+                        clients[index].id
+                    );
+                }
+
+                continue;
+            }
+
+            /*--------------------------------------*/
+            /* ONLY CURRENT CLIENT CAN QUERY */
+            /*--------------------------------------*/
+
+            if (index != currentClient)
+            {
+                sendMessage(
+                    serverSocket,
+                    "WAIT",
+                    &clients[index].address
+                );
+
+                continue;
+            }
+
+            printf(
+                "\nClient %d DNS Query: %s\n",
+                clients[index].id,
+                domain
+            );
+
+            /*--------------------------------------*/
+            /* EXIT */
+            /*--------------------------------------*/
+
+            if (
+                strcmp(
+                    domain,
+                    "exit"
+                ) == 0
+            )
+            {
+                sendMessage(
+                    serverSocket,
+                    "exit",
+                    &clients[index].address
+                );
+
+                printf(
+                    "Client %d disconnected.\n",
+                    clients[index].id
+                );
+
+                clients[index].active = 0;
+
+                clients[index].waiting = 0;
+
+                clients[index].finished = 1;
+
+                currentClient = -1;
+
+                /* Find next client */
+
+                index = findNextClient(
+                    clients,
+                    clientCount
+                );
+
+                if (index != -1)
+                {
+                    currentClient = index;
+
+                    clients[index].waiting = 0;
+
+                    sendMessage(
+                        serverSocket,
+                        "START",
+                        &clients[index].address
+                    );
+
+                    printf(
+                        "Client %d is now chatting with DNS server.\n",
+                        clients[index].id
+                    );
+                }
+
+                else
+                {
+                    printf(
+                        "\nAll clients completed.\n"
+                    );
+
+                    break;
+                }
+
+                continue;
+            }
+
+            /*--------------------------------------*/
+            /* FIND IP */
+            /*--------------------------------------*/
+
+            findIPAddress(
+                domain,
+                ip
+            );
+
+            printf(
+                "DNS Server IP: %s\n",
+                ip
+            );
+
+            /*--------------------------------------*/
+            /* SEND RESPONSE */
+            /*--------------------------------------*/
+
+            sendMessage(
+                serverSocket,
+                ip,
+                &clients[index].address
+            );
+        }
+
+
+        /*------------------------------------------*/
+        /* SERVER KEYBOARD */
+        /*------------------------------------------*/
+
+        if (
+            FD_ISSET(
+                STDIN_FILENO,
+                &readfds
+            )
+        )
+        {
+            char command[BUFFER_SIZE];
+
+            int clientID;
+
+            char message[BUFFER_SIZE];
+
+            fgets(
+                command,
+                BUFFER_SIZE,
+                stdin
+            );
+
+            command[
+                strcspn(
+                    command,
+                    "\n"
+                )
+            ] = '\0';
+
+            if (
+                sscanf(
+                    command,
+                    "send %d %[^\n]",
+                    &clientID,
+                    message
+                ) == 2
+            )
+            {
+                if (
+                    clientID >= 1 &&
+                    clientID <= clientCount
+                )
+                {
+                    sendMessage(
+                        serverSocket,
+                        message,
+                        &clients[clientID - 1].address
+                    );
+
+                    printf(
+                        "Server -> Client %d: %s\n",
+                        clientID,
+                        message
+                    );
+                }
+
+                else
+                {
+                    printf(
+                        "Invalid client ID\n"
+                    );
+                }
+            }
+
+            else
+            {
+                printf(
+                    "Use: send <client_id> <message>\n"
+                );
+            }
+        }
+    }
+}
+
+/*--------------------------------------------------*/
+/* Main */
+/*--------------------------------------------------*/
+
+int main()
+{
+    int serverSocket;
+
+    struct sockaddr_in serverAddr;
+
+    printf(
+        "\n================ DNS SERVER ================\n\n"
+    );
+
+    serverSocket =
+        createSocket();
+
+    bindSocket(
+        serverSocket,
+        &serverAddr
+    );
+
+    printf(
+        "\nWaiting for multiple clients...\n"
+    );
+
+    processDNS(
+        serverSocket
+    );
+
+    close(serverSocket);
+
+    printf(
+        "\nDNS Server closed.\n"
+    );
+
+    return 0;
+}
+[24bcs135@mepcolinux iterative]$cat dnsclient.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <sys/socket.h>
+
+#define PORT 8082
+#define BUFFER_SIZE 1024
+
+/*--------------------------------------------------*/
+/* Function Declarations */
+/*--------------------------------------------------*/
+
+int createSocket();
+
+void setServerAddress(
+    struct sockaddr_in *serverAddr
+);
+
+void sendMessage(
+    int clientSocket,
+    char message[],
+    struct sockaddr_in *serverAddr
+);
+
+void receiveMessage(
+    int clientSocket,
+    char message[]
+);
+
+void waitForTurn(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+);
+
+void processDNS(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+);
+
+/*--------------------------------------------------*/
+/* Create Socket */
+/*--------------------------------------------------*/
+
+int createSocket()
+{
+    int clientSocket;
+
+    clientSocket = socket(
+        AF_INET,
+        SOCK_DGRAM,
+        0
+    );
+
+    if (clientSocket < 0)
+    {
+        printf(
+            "Socket creation failed\n"
+        );
+
+        exit(1);
+    }
+
+    printf(
+        "DNS Client socket created successfully\n"
+    );
+
+    return clientSocket;
+}
+
+/*--------------------------------------------------*/
+/* Set Server Address */
+/*--------------------------------------------------*/
+
+void setServerAddress(
+    struct sockaddr_in *serverAddr
+)
+{
+    char serverIP[50];
+
+    memset(
+        serverAddr,
+        0,
+        sizeof(*serverAddr)
+    );
+
+    printf(
+        "Enter Server IP Address: "
+    );
+
+    scanf(
+        "%49s",
+        serverIP
+    );
+
+    serverAddr->sin_family =
+        AF_INET;
+
+    serverAddr->sin_port =
+        htons(PORT);
+
+    serverAddr->sin_addr.s_addr =
+        inet_addr(serverIP);
+}
+
+/*--------------------------------------------------*/
+/* Send Message */
+/*--------------------------------------------------*/
+
+void sendMessage(
+    int clientSocket,
+    char message[],
+    struct sockaddr_in *serverAddr
+)
+{
+    sendto(
+        clientSocket,
+        message,
+        strlen(message) + 1,
+        0,
+        (struct sockaddr *)serverAddr,
+        sizeof(*serverAddr)
+    );
+}
+
+/*--------------------------------------------------*/
+/* Receive Message */
+/*--------------------------------------------------*/
+
+void receiveMessage(
+    int clientSocket,
+    char message[]
+)
+{
+    int bytesReceived;
+
+    memset(
+        message,
+        0,
+        BUFFER_SIZE
+    );
+
+    bytesReceived = recvfrom(
+        clientSocket,
+        message,
+        BUFFER_SIZE - 1,
+        0,
+        NULL,
+        NULL
+    );
+
+    if (bytesReceived < 0)
+    {
+        printf(
+            "Receive failed\n"
+        );
+
+        exit(1);
+    }
+
+    message[bytesReceived] =
+        '\0';
+}
+
+/*--------------------------------------------------*/
+/* Wait For Turn */
+/*--------------------------------------------------*/
+
+void waitForTurn(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+)
+{
+    char message[BUFFER_SIZE];
+
+    /* Send CONNECT */
+
+    strcpy(
+        message,
+        "CONNECT"
+    );
+
+    sendMessage(
+        clientSocket,
+        message,
+        serverAddr
+    );
+
+    printf(
+        "Client connection request sent to DNS Server\n"
+    );
+
+    /* Receive START / WAIT */
+
+    receiveMessage(
+        clientSocket,
+        message
+    );
+
+    if (
+        strcmp(
+            message,
+            "WAIT"
+        ) == 0
+    )
+    {
+        printf(
+            "Client is waiting for its turn...\n"
+        );
+
+        while (1)
+        {
+            receiveMessage(
+                clientSocket,
+                message
+            );
+
+            if (
+                strcmp(
+                    message,
+                    "START"
+                ) == 0
+            )
+            {
+                printf(
+                    "Client is now chatting with DNS Server.\n"
+                );
+
+                break;
+            }
+        }
+    }
+
+    else if (
+        strcmp(
+            message,
+            "START"
+        ) == 0
+    )
+    {
+        printf(
+            "Client is now chatting with DNS Server.\n"
+        );
+    }
+}
+
+/*--------------------------------------------------*/
+/* DNS Processing */
+/*--------------------------------------------------*/
+
+void processDNS(
+    int clientSocket,
+    struct sockaddr_in *serverAddr
+)
+{
+    char domain[BUFFER_SIZE];
+
+    char ip[BUFFER_SIZE];
+
+    /*----------------------------------------------*/
+    /* Wait For Client Turn */
+    /*----------------------------------------------*/
+
+    waitForTurn(
+        clientSocket,
+        serverAddr
+    );
+
+    /*----------------------------------------------*/
+    /* DNS Query */
+    /*----------------------------------------------*/
+
+    while (1)
+    {
+        printf(
+            "\nEnter domain name: "
+        );
+
+        scanf(
+            "%1023s",
+            domain
+        );
+
+        /* Send domain */
+
+        sendMessage(
+            clientSocket,
+            domain,
+            serverAddr
+        );
+
+        /* Receive IP */
+
+        receiveMessage(
+            clientSocket,
+            ip
+        );
+
+        printf(
+            "DNS Server Response: %s\n",
+            ip
+        );
+
+        /* Exit */
+
+        if (
+            strcmp(
+                domain,
+                "exit"
+            ) == 0
+        )
+        {
+            printf(
+                "DNS client terminated.\n"
+            );
+
+            break;
+        }
+
+        printf(
+            "IP Address for %s = %s\n",
+            domain,
+            ip
+        );
+    }
+}
+
+/*--------------------------------------------------*/
+/* Main */
+/*--------------------------------------------------*/
+
+int main()
+{
+    int clientSocket;
+
+    struct sockaddr_in serverAddr;
+
+    printf(
+        "\n================ DNS CLIENT ================\n\n"
+    );
+
+    clientSocket =
+        createSocket();
+
+    setServerAddress(
+        &serverAddr
+    );
+
+    printf(
+        "DNS Client started\n"
+    );
+
+    processDNS(
+        clientSocket,
+        &serverAddr
+    );
+
+    close(clientSocket);
+
+    return 0;
+}
+[24bcs135@mepcolinux iterative]$./dnsserver
+
+================ DNS SERVER ================
+
+DNS Server socket created successfully
+DNS Server is running on port 8082
+
+Waiting for multiple clients...
+
+Client 1 connected.
+Client 1 is now chatting with DNS server.
+
+Client 1 DNS Query: google.com
+DNS Server IP: 142.250.195.14
+
+Client 1 DNS Query: abc.com
+DNS Server IP: Domain not found
+
+Client 1 DNS Query: exit
+Client 1 disconnected.
+
+All clients completed.
+
+DNS Server closed.
