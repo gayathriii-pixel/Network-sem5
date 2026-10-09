@@ -1,0 +1,1317 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define N 2
+#define B 8000
+
+struct Node {
+    char u[50];
+    char ip[20];
+    char mac[20];
+    int p;
+};
+
+struct Header {
+    int sp;
+    int dp;
+    char sip[20];
+    char dip[20];
+    char smac[20];
+    char dmac[20];
+};
+
+struct Header hd;
+char msg[100];
+char stf[200];
+int len;
+int slen;
+
+struct Node tbl[N] = {
+    {"www.google.com", "192.168.166.242", "43:50:94:25:49:12", 49101},
+    {"www.email.com", "192.168.246.228", "07:C1:F0:7C:1F:07", 9208}
+};
+
+void bin(char ch, char *bv) {
+    int i = 7;
+    while (i >= 0) {
+        bv[7 - i] = ((ch >> i) & 1) ? '1' : '0';
+        i--;
+    }
+    bv[8] = '\0';
+}
+
+int map(char *su, char *du) {
+    int si = -1, di = -1, i = 0;
+    while (i < N) {
+        if (strcmp(tbl[i].u, su) == 0) si = i;
+        if (strcmp(tbl[i].u, du) == 0) di = i;
+        i++;
+    }
+    if (si == -1 || di == -1) return 0;
+
+    hd.sp = tbl[si].p;
+    hd.dp = tbl[di].p;
+    strcpy(hd.sip, tbl[si].ip);
+    strcpy(hd.dip, tbl[di].ip);
+    strcpy(hd.smac, tbl[si].mac);
+    strcpy(hd.dmac, tbl[di].mac);
+    return 1;
+}
+
+int stuff(char *src, char *dst) {
+    int i = 0, j = 0;
+    int sl = strlen(src);
+    while (i < sl) {
+        if (strncmp(&src[i], "ETX", 3) == 0) {
+            strcpy(&dst[j], "DLEETX");
+            j += 6; i += 2;
+        } else if (strncmp(&src[i], "DLE", 3) == 0) {
+            strcpy(&dst[j], "DLEDLE");
+            j += 6; i += 2;
+        } else {
+            dst[j++] = src[i];
+        }
+        i++;
+    }
+    dst[j] = '\0';
+    return j;
+}
+
+void stream(char *src, char *bs) {
+    char tb[9];
+    int i = 0;
+    bs[0] = '\0';
+    while (src[i] != '\0') {
+        bin(src[i], tb);
+        strcat(bs, tb);
+        i++;
+    }
+}
+
+void send() {
+    FILE *fp;
+    int i = 0;
+    fp = fopen("text.txt", "w");
+    if (fp == NULL) {
+        printf("Error opening file\n");
+        return;
+    }
+    fputs("SYN", fp);
+    fputs("SYN", fp);
+    fputs("SOH", fp);
+    fwrite(&hd, sizeof(struct Header), 1, fp);
+    fputs("STX", fp);
+    while (i < slen) {
+        fputc(stf[i], fp);
+        i++;
+    }
+    fputs("ETX", fp);
+    fputc('0', fp);
+    fclose(fp);
+    printf("\nFrame successfully written to text.txt in BISYNC format!\n");
+}
+
+int main() {
+    char su[50], du[50], ch;
+    char bv[9];
+    int ps, fs, i, k, p, b;
+    FILE *fp;
+
+    printf("Enter Source URL : ");
+    scanf("%s", su);
+    printf("Enter Destination URL : ");
+    scanf("%s", du);
+
+    if (!map(su, du)) {
+        printf("Error: Configuration parameters could not be mapped from table.\n");
+        return 1;
+    }
+
+    printf("\nSTORED VALUES IN STRUCTURE TABLE\nMapped successfully.\n");
+    printf("Enter Payload (no spaces): ");
+    scanf("%s", msg);
+    len = strlen(msg);
+
+    printf("Enter Packet Size (in bits): ");
+    scanf("%d", &ps);
+    printf("Enter Frame Size (in bits): ");
+    scanf("%d", &fs);
+
+    char rpb[B];
+    stream(msg, rpb);
+
+    printf("\n====================================\nAPPLICATION LAYER\n====================================\n");
+    printf("Application Data : %s\n", msg);
+    printf("Output stream (Data bits): ");
+    i = 0;
+    while (msg[i] != '\0') {
+        bin(msg[i], bv);
+        printf("%s ", bv);
+        i++;
+    }
+    printf("\n");
+
+    printf("\n====================================\nTRANSPORT LAYER\n====================================\n");
+    printf("Added TCP/UDP Segment Headers:\n");
+    printf("  Source Port bits     : ");
+    i = 15;
+    while (i >= 0)
+    {
+       printf("%d", (hd.sp >> i) & 1);
+       i--;
+    }
+    printf("\n  Destination Port bits: ");
+    i = 15;
+    while (i >= 0)
+    {
+       printf("%d", (hd.dp >> i) & 1);
+       i--;
+    }
+    printf("\n\n[Appended Output stream] -> Segment (Ports + Data):\n");
+    i = 15;
+    while (i >= 0)
+    {
+       printf("%d", (hd.sp >> i) & 1);
+       i--;
+    }
+    printf(" ");
+    i = 15;
+    while (i >= 0)
+    {
+       printf("%d", (hd.dp >> i) & 1);
+       i--;
+    }
+    printf(" ");
+    i = 0;
+    while (msg[i] != '\0')
+    {
+       bin(msg[i], bv);
+       printf("%s ", bv);
+       i++;
+    }
+    printf("\n");
+
+    char phb[40] = "";
+    i = 15;
+    while (i >= 0)
+    {
+       sprintf(&phb[strlen(phb)], "%d", (hd.sp >> i) & 1);
+       i--;
+    }
+    i = 15;
+    while (i >= 0)
+    {
+       sprintf(&phb[strlen(phb)], "%d", (hd.dp >> i) & 1);
+       i--;
+    }
+
+    char ihb[400] = "";
+    k = 0;
+    while (k < (int)strlen(hd.sip))
+    {
+       bin(hd.sip[k], bv);
+       strcat(ihb, bv);
+       k++;
+    }
+    k = 0;
+    while (k < (int)strlen(hd.dip))
+    {
+       bin(hd.dip[k], bv);
+       strcat(ihb, bv);
+       k++;
+    }
+
+    char mhb[400] = "";
+    k = 0;
+    while (k < (int)strlen(hd.smac))
+    {
+       bin(hd.smac[k], bv);
+       strcat(mhb, bv);
+       k++;
+    }
+    k = 0;
+    while (k < (int)strlen(hd.dmac))
+    {
+       bin(hd.dmac[k], bv);
+       strcat(mhb, bv);
+       k++;
+    }
+
+    char cnb[B];
+    strcpy(cnb, phb);
+    strcat(cnb, rpb);
+    int npl = strlen(cnb);
+    int tp = (npl + ps - 1) / ps;
+
+    printf("\n====================================\nNETWORK LAYER\n====================================\n");
+    printf("Added IP Packet Headers:\n");
+    printf("  Source IP bits     : ");
+    k = 0; while (k < (int)strlen(hd.sip)) { bin(hd.sip[k], bv); printf("%s ", bv); k++; }
+    printf("\n  Destination IP bits: ");
+    k = 0; while (k < (int)strlen(hd.dip)) { bin(hd.dip[k], bv); printf("%s ", bv); k++; }
+    printf("\n");
+
+    char mpb[B] = "";
+    p = 0;
+    while (p < tp) {
+        int sb = p * ps;
+        char cpp[B] = "";
+
+        b = 0;
+        while (b < ps) {
+            int ci = sb + b;
+            if (ci < npl) {
+                char tmp[2] = {cnb[ci], '\0'};
+                strcat(cpp, tmp);
+            } else {
+                strcat(cpp, "0");
+            }
+            b++;
+        }
+
+        printf("\nPACKET %d (Bits %d to %d)\n", p + 1, sb, sb + ps - 1);
+        printf("[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):\n");
+
+        k = 0;
+        while (ihb[k] != '\0') {
+            printf("%c", ihb[k]);
+            if ((k + 1) % 8 == 0) printf(" ");
+            k++;
+        }
+        printf(" ");
+
+        k = 0;
+        while (cpp[k] != '\0') {
+            printf("%c", cpp[k]);
+            if ((k + 1) % 8 == 0) printf(" ");
+            k++;
+        }
+        printf("\n");
+
+        strcat(mpb, cpp);
+        p++;
+    }
+
+    printf("\n====================================\nDATA LINK LAYER (BIT-BASED SPLITTING WITH PADDING & STUFFING)\n====================================\n");
+    slen = stuff(msg, stf);
+    printf("[Character Transparency Processing via Byte-Stuffing Tracing]:\n");
+    printf("  Original Message String : %s\n", msg);
+    printf("  Stuffed Output Stream   : %s\n\n", stf);
+
+    int fpp = ps / fs;
+    int cg = 0;
+
+    p = 0;
+    while (p < tp) {
+        printf("------------------------------------\n");
+        printf("PACKET %d FRAME SEGMENTATION DETAILS\n", p + 1);
+        printf("------------------------------------\n");
+        printf("Added Frame MAC Headers:\n");
+        printf("  Source MAC bits     : ");
+        k = 0; while (k < (int)strlen(hd.smac)) { bin(hd.smac[k], bv); printf("%s ", bv); k++; }
+        printf("\n  Destination MAC bits: ");
+        k = 0; while (k < (int)strlen(hd.dmac)) { bin(hd.dmac[k], bv); printf("%s ", bv); k++; }
+        printf("\n\n[Appended Output stream Processed inside Frame Windows]:\n");
+
+        int f = 0;
+        while (f < fpp) {
+            int fbs = (p * ps) + (f * fs);
+            char cfp[B] = "";
+
+            b = 0;
+            while (b < fs) {
+                int gi = fbs + b;
+                if (gi < (int)strlen(mpb)) {
+                    char tmp[2] = {mpb[gi], '\0'};
+                    strcat(cfp, tmp);
+                } else {
+                    strcat(cfp, "0");
+                }
+                b++;
+            }
+
+            printf("  Frame %d (Bits %d to %d) -> Full Frame bits:\n  ", f + 1, f * fs, (f * fs) + fs - 1);
+
+            k = 0;
+            while (mhb[k] != '\0') {
+                printf("%c", mhb[k]);
+                if ((k + 1) % 8 == 0) printf(" ");
+                k++;
+            }
+            printf("  %s\n", cfp);
+            cg++;
+            f++;
+        }
+        printf("\n");
+        p++;
+    }
+
+    printf("====================================\n");
+    printf("TRANSMISSION METRICS SUMMARY\n");
+    printf("====================================\n");
+    printf("Total Packets Generated : %d\n", tp);
+    printf("Total Frames Generated  : %d\n", cg);
+
+    send();
+
+    printf("\n====================================\n");
+    printf("PHYSICAL LAYER\n");
+    printf("====================================\n");
+    printf("[Appended Output stream] -> Final Bitstream over physical medium:\n");
+
+    fp = fopen("text.txt", "r");
+    if (fp == NULL) {
+        printf("Error opening file for reading\n");
+        return 1;
+    }
+
+    ch = fgetc(fp);
+    while (ch != EOF) {
+        bin(ch, bv);
+        printf("%s ", bv);
+        ch = fgetc(fp);
+    }
+    printf("\n");
+    fclose(fp);
+
+    return 0;
+}
+
+[24bcs135@mepcolinux ex1]$cc bsen.c
+[24bcs135@mepcolinux ex1]$./a.out
+Enter Source URL : www.google.com
+Enter Destination URL : www.google.com
+
+STORED VALUES IN STRUCTURE TABLE
+Mapped successfully.
+Enter Payload (no spaces): hDLE
+Enter Packet Size (in bits): 24
+Enter Frame Size (in bits): 8
+
+====================================
+APPLICATION LAYER
+====================================
+Application Data : hDLE
+Output stream (Data bits): 01101000 01000100 01001100 01000101
+
+====================================
+TRANSPORT LAYER
+====================================
+Added TCP/UDP Segment Headers:
+  Source Port bits     : 1011111111001101
+  Destination Port bits: 1011111111001101
+
+[Appended Output stream] -> Segment (Ports + Data):
+1011111111001101 1011111111001101 01101000 01000100 01001100 01000101
+
+====================================
+NETWORK LAYER
+====================================
+Added IP Packet Headers:
+  Source IP bits     : 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010
+  Destination IP bits: 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010
+
+PACKET 1 (Bits 0 to 23)
+[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):
+00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010  10111111 11001101 10111111
+
+PACKET 2 (Bits 24 to 47)
+[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):
+00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010  11001101 01101000 01000100
+
+PACKET 3 (Bits 48 to 71)
+[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):
+00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010  01001100 01000101 00000000
+
+====================================
+DATA LINK LAYER (BIT-BASED SPLITTING WITH PADDING & STUFFING)
+====================================
+[Character Transparency Processing via Byte-Stuffing Tracing]:
+  Original Message String : hDLE
+  Stuffed Output Stream   : hDLEDLE
+
+------------------------------------
+PACKET 1 FRAME SEGMENTATION DETAILS
+------------------------------------
+Added Frame MAC Headers:
+  Source MAC bits     : 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+  Destination MAC bits: 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+
+[Appended Output stream Processed inside Frame Windows]:
+  Frame 1 (Bits 0 to 7) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   10111111
+  Frame 2 (Bits 8 to 15) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   11001101
+  Frame 3 (Bits 16 to 23) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   10111111
+
+------------------------------------
+PACKET 2 FRAME SEGMENTATION DETAILS
+------------------------------------
+Added Frame MAC Headers:
+  Source MAC bits     : 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+  Destination MAC bits: 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+
+[Appended Output stream Processed inside Frame Windows]:
+  Frame 1 (Bits 0 to 7) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   11001101
+  Frame 2 (Bits 8 to 15) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   01101000
+  Frame 3 (Bits 16 to 23) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   01000100
+
+------------------------------------
+PACKET 3 FRAME SEGMENTATION DETAILS
+------------------------------------
+Added Frame MAC Headers:
+  Source MAC bits     : 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+  Destination MAC bits: 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+
+[Appended Output stream Processed inside Frame Windows]:
+  Frame 1 (Bits 0 to 7) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   01001100
+  Frame 2 (Bits 8 to 15) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   01000101
+  Frame 3 (Bits 16 to 23) -> Full Frame bits:
+  00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010   00000000
+
+====================================
+TRANSMISSION METRICS SUMMARY
+====================================
+Total Packets Generated : 3
+Total Frames Generated  : 9
+
+Frame successfully written to text.txt in BISYNC format!
+
+====================================
+PHYSICAL LAYER
+====================================
+[Appended Output stream] -> Final Bitstream over physical medium:
+01010011 01011001 01001110 01010011 01011001 01001110 01010011 01001111 01001000 11001101 10111111 00000000 00000000 11001101 10111111 00000000 00000000 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 01010011 01010100 01011000 01101000 01000100 01001100 01000101 01000100 01001100 01000101 01000101 01010100 01011000 00110000
+[24bcs135@mepcolinux ex1]$cat brec.c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+struct Header
+{
+    int sp;
+    int dp;
+    char sip[20];
+    char dip[20];
+    char smac[20];
+    char dmac[20];
+};
+
+struct Header hd;
+char buf[100];
+char msg[100];
+int slen;
+int len;
+
+void bin(char ch, char *binval)
+{
+    int i;
+    for (i = 7; i >= 0; i--)
+    {
+        binval[7-i] = ((ch>>i)&1)?'1':'0';
+    }
+    binval[8] = '\0';
+}
+
+void head()
+{
+    int i;
+    char binval[9];
+
+    printf("\n====================================\n");
+    printf("NETWORK LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Extracted IP Packet Headers:\n");
+    printf("  Source IP        : %s\n", hd.sip);
+    printf("  Destination IP   : %s\n", hd.dip);
+    printf("  Source MAC       : %s\n", hd.smac);
+    printf("  Destination MAC  : %s\n", hd.dmac);
+
+    printf("\nRemaining Stream payload moving up:\n");
+    printf("  ");
+    for(i = 15; i >= 0; i--) printf("%d", (hd.sp >> i) & 1);
+    printf(" ");
+    for(i = 15; i >= 0; i--) printf("%d", (hd.dp >> i) & 1);
+    printf(" ");
+    for(i = 0; i < slen; i++) {
+        bin(buf[i], binval);
+        printf("%s ", binval);
+    }
+    printf("\n");
+}
+
+int unstuff()
+{
+    int i, j;
+    j = 0;
+    i = 0;
+    while (i < slen)
+    {
+        if (strncmp(&buf[i], "DLE", 3) == 0 && strncmp(&buf[i + 3], "DLE", 3) == 0)
+        {
+            msg[j++] = 'D';
+            msg[j++] = 'L';
+            msg[j++] = 'E';
+            i += 6;
+            continue;
+        }
+        msg[j] = buf[i];
+        j++;
+        i++;
+    }
+    msg[j] = '\0';
+    return j;
+}
+
+void recv()
+{
+    FILE *fp;
+    char read[100];
+    char ch;
+    int i = 0;
+    char binval[9];
+
+    fp = fopen("text.txt", "rb");
+    if (fp == NULL)
+    {
+        printf("Error opening file\n");
+        return;
+    }
+
+    printf("\n====================================\n");
+    printf("PHYSICAL LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Incoming Bitstream detected over physical medium:\n  ");
+    while ((ch = fgetc(fp)) != EOF) {
+        bin(ch, binval);
+        printf("%s ", binval);
+    }
+    printf("\n");
+
+    fseek(fp, 0, SEEK_SET);
+
+    printf("\n====================================\n");
+    printf("DATA LINK LAYER DECAPSULATION\n");
+    printf("====================================\n");
+
+    fgets(read, 4, fp);
+    if (strncmp(read, "SYN", 3) != 0)
+    {
+        printf("Frame error: missing first SYN\n");
+        fclose(fp);
+        return;
+    }
+
+    fgets(read, 4, fp);
+    if (strncmp(read, "SYN", 3) != 0)
+    {
+        printf("Frame error: missing second SYN\n");
+        fclose(fp);
+        return;
+    }
+
+    fgets(read, 4, fp);
+    if (strncmp(read, "SOH", 3) != 0)
+    {
+        printf("Frame error: missing SOH\n");
+        fclose(fp);
+        return;
+    }
+
+    printf("Preamble Alignment Validation:\n");
+    printf("  SYN SYN SOH validated successfully\n");
+
+    fread(&hd, sizeof(struct Header), 1, fp);
+
+    fgets(read, 4, fp);
+    if (strncmp(read, "STX", 3) != 0)
+    {
+        printf("Frame error: missing STX\n");
+        fclose(fp);
+        return;
+    }
+    printf("  STX & ETX Markers validated successfully\n");
+
+    i = 0;
+    while (1)
+    {
+        long current_pos = ftell(fp);
+        fgets(read, 4, fp);
+
+        if (strncmp(read, "ETX", 3) == 0 || feof(fp))
+        {
+            break;
+        }
+
+        fseek(fp, current_pos, SEEK_SET);
+        ch = fgetc(fp);
+        buf[i] = ch;
+        i++;
+    }
+    slen = i;
+
+    ch = fgetc(fp);
+    printf("  CRC byte received: ");
+    bin(ch, binval);
+    printf("%s\n", binval);
+
+    printf("\nRaw buffer payload (Stuffed Character Stream):\n  ");
+    for(i=0; i<slen; i++)
+    {
+       printf("%c", buf[i]);
+    }
+    printf("\n");
+
+    fclose(fp);
+}
+
+int main()
+{
+    int i;
+    char binval[9];
+
+    recv();
+    head();
+
+    printf("\n====================================\n");
+    printf("TRANSPORT LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Extracted TCP/UDP Segment Headers:\n");
+    printf("  Source Port      : %d\n", hd.sp);
+    printf("  Destination Port : %d\n", hd.dp);
+    printf("\nRemaining Stream payload moving up:\n");
+    printf("  ");
+    for(i = 0; i < slen; i++) {
+        bin(buf[i], binval);
+        printf("%s ", binval);
+    }
+    printf("\n");
+
+    len = unstuff();
+
+    printf("\n====================================\n");
+    printf("APPLICATION LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Unstuffed Message: %s\n", msg);
+    return 0;
+}
+
+[24bcs135@mepcolinux ex1]$cc brec.c
+[24bcs135@mepcolinux ex1]$./a.out
+
+====================================
+PHYSICAL LAYER DECAPSULATION
+====================================
+Incoming Bitstream detected over physical medium:
+  01010011 01011001 01001110 01010011 01011001 01001110 01010011 01001111 01001000 11001101 10111111 00000000 00000000 11001101 10111111 00000000 00000000 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00110110 00110110 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 01010011 01010100 01011000 01101000 01000100 01001100 01000101 01000100 01001100 01000101 01000101 01010100 01011000 00110000
+
+====================================
+DATA LINK LAYER DECAPSULATION
+====================================
+Preamble Alignment Validation:
+  SYN SYN SOH validated successfully
+  STX & ETX Markers validated successfully
+  CRC byte received: 00110000
+
+Raw buffer payload (Stuffed Character Stream):
+  hDLEDLE
+
+====================================
+NETWORK LAYER DECAPSULATION
+====================================
+Extracted IP Packet Headers:
+  Source IP        : 192.168.166.242
+  Destination IP   : 192.168.166.242
+  Source MAC       : 43:50:94:25:49:12
+  Destination MAC  : 43:50:94:25:49:12
+
+Remaining Stream payload moving up:
+  1011111111001101 1011111111001101 01101000 01000100 01001100 01000101 01000100 01001100 01000101
+
+====================================
+TRANSPORT LAYER DECAPSULATION
+====================================
+Extracted TCP/UDP Segment Headers:
+  Source Port      : 49101
+  Destination Port : 49101
+
+Remaining Stream payload moving up:
+  01101000 01000100 01001100 01000101 01000100 01001100 01000101
+
+====================================
+APPLICATION LAYER DECAPSULATION
+====================================
+Unstuffed Message: hDLE
+[24bcs135@mepcolinux ex1]$cat dsen.c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define SYN "SYN"
+#define SOH "SOH"
+#define NUL "NUL"
+
+struct Node {
+    char url[50];
+    char ip[20];
+    char mac[20];
+    int port;
+};
+
+struct Node table[2] = {
+    {"www.google.com", "192.168.1.242", "43:50:94:25:49:12", 49101},
+    {"www.email.com",  "192.168.246.228", "07:C1:F0:7C:1F:07", 9208}
+};
+
+char srcUrl[50], destUrl[50];
+char srcIp[20], destIp[20];
+char srcMac[20], destMac[20];
+int srcPort = 0, destPort = 0;
+
+char payload[100];
+int payloadLen = 0;
+int packetSize = 0;
+int frameSize = 0;
+
+void printByte(int num) {
+    int i;
+    for (i = 7; i >= 0; i--) {
+        printf("%d", (num >> i) & 1);
+    }
+}
+
+void printString(const char *str) {
+    int i;
+    for (i = 0; str[i] != '\0'; i++) {
+        printByte((unsigned char)str[i]);
+        printf(" ");
+    }
+}
+
+void printInt(unsigned int value, int totalBits) {
+    int i;
+    for (i = totalBits - 1; i >= 0; i--) {
+        printf("%d", (value >> i) & 1);
+    }
+}
+
+void lookupAddresses() {
+    int i;
+    for (i = 0; i < 2; i++) {
+        if (strcmp(srcUrl, table[i].url) == 0) {
+            strcpy(srcIp, table[i].ip);
+            strcpy(srcMac, table[i].mac);
+            srcPort = table[i].port;
+        }
+        if (strcmp(destUrl, table[i].url) == 0) {
+            strcpy(destIp, table[i].ip);
+            strcpy(destMac, table[i].mac);
+            destPort = table[i].port;
+        }
+    }
+    printf("Mapped successfully.\n");
+}
+
+void processLayers() {
+    int totalPayloadBits = payloadLen * 8;
+
+    printf("\n====================================\nAPPLICATION LAYER\n====================================\n");
+    printf("Application Data : %s\n", payload);
+    printf("Output stream (Data bits): ");
+    printString(payload);
+    printf("\n");
+
+    printf("\n====================================\nTRANSPORT LAYER\n====================================\n");
+    printf("Added Segment Headers:\n");
+    printf("  Source Port bits     : "); printInt(srcPort, 16); printf("\n");
+    printf("  Destination Port bits: "); printInt(destPort, 16); printf("\n");
+
+    printf("\n[Appended Output stream] -> Segment (Ports + Data):\n");
+    printInt(srcPort, 16); printf(" ");
+    printInt(destPort, 16); printf(" ");
+    printString(payload);
+    printf("\n");
+
+    printf("\n====================================\nNETWORK LAYER\n====================================\n");
+    printf("Added IP Packet Headers:\n");
+    printf("  Source IP bits     : "); printString(srcIp); printf("\n");
+    printf("  Destination IP bits: "); printString(destIp); printf("\n");
+
+    int headerBits = 32;
+    int totalNetworkBits = headerBits + totalPayloadBits;
+    int numPackets = (totalNetworkBits + packetSize - 1) / packetSize;
+
+    int *bitStream = (int *)calloc(2000, sizeof(int));
+    int bitIndex = 0, i, j;
+
+    for (i = 15; i >= 0; i--) bitStream[bitIndex++] = (srcPort >> i) & 1;
+    for (i = 15; i >= 0; i--) bitStream[bitIndex++] = (destPort >> i) & 1;
+    for (i = 0; i < payloadLen; i++) {
+        for (j = 7; j >= 0; j--) {
+            bitStream[bitIndex++] = (payload[i] >> j) & 1;
+        }
+    }
+
+    int offset = 0;
+    for (i = 0; i < numPackets; i++) {
+        int endBit = offset + packetSize - 1;
+
+        printf("\nPACKET %d (Bits %d to %d)\n", i + 1, offset, endBit);
+        printf("[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):\n");
+        printString(srcIp); printf(" ");
+        printString(destIp); printf("  ");
+
+        for (j = offset; j <= endBit; j++) {
+            if (j < totalNetworkBits) {
+                printf("%d", bitStream[j]);
+            } else {
+                printf("0");
+            }
+            if ((j - offset + 1) % 8 == 0 && j != endBit) printf(" ");
+        }
+        printf("\n");
+        offset += packetSize;
+    }
+
+    printf("\n====================================\nDATA LINK LAYER (BYTE-COUNT SYSTEM)\n====================================\n");
+    printf("[Byte Count System Tracking Check]:\n");
+    printf("  Original Message String : %s\n", payload);
+    printf("  Payload Byte Count      : %d bytes (%d bits)\n", payloadLen, totalPayloadBits);
+
+    for (i = 0; i < numPackets; i++) {
+        int bitsRemaining = packetSize;
+        int frameCount = 1;
+
+        printf("\n------------------------------------\nPACKET %d FRAME SEGMENTATION DETAILS\n------------------------------------\n", i + 1);
+        printf("Added Frame MAC Headers:\n");
+        printf("  Source MAC bits     : "); printString(srcMac); printf("\n");
+        printf("  Destination MAC bits: "); printString(destMac); printf("\n");
+        printf("\n[Appended Output stream Processed inside Frame Windows]:\n");
+
+        int packetPointer = i * packetSize;
+        while (bitsRemaining > 0) {
+            int currentFrameSize = (bitsRemaining > frameSize) ? frameSize : bitsRemaining;
+            int startFrameBit = (frameCount - 1) * frameSize;
+            int endFrameBit = startFrameBit + frameSize - 1;
+
+            printf("  Frame %d (Bits %d to %d) -> Full Frame bits:\n      ", frameCount, startFrameBit, endFrameBit);
+
+            for (j = 0; j < frameSize; j++) {
+                int globalPos = packetPointer + (frameCount - 1) * frameSize + j;
+                if (globalPos < totalNetworkBits && j < currentFrameSize) {
+                    printf("%d", bitStream[globalPos]);
+                } else {
+                    printf("0");
+                }
+            }
+            printf("\n");
+            bitsRemaining -= frameSize;
+            frameCount++;
+        }
+    }
+    free(bitStream);
+}
+
+void writeBinaryFile() {
+    FILE *fp = fopen("tx_frame.bin", "wb");
+    if (fp == NULL) return;
+
+    fputs(SYN, fp);
+    fputs(SYN, fp);
+    fputs(SOH, fp);
+
+    char mask = ~'\0';
+    fputc((payloadLen >> 8) & mask, fp);
+    fputc(payloadLen & mask, fp);
+
+    fwrite(srcIp, 1, 20, fp);
+    fwrite(destIp, 1, 20, fp);
+    fwrite(srcMac, 1, 20, fp);
+    fwrite(destMac, 1, 20, fp);
+    fwrite(payload, 1, payloadLen, fp);
+
+    fputs(NUL, fp);
+    fclose(fp);
+    printf("\nFrame written to tx_frame.bin using pure control token syntax.\n");
+}
+
+void readAndPrintBinaryFile() {
+    FILE *fp = fopen("tx_frame.bin", "rb");
+    if (fp == NULL) return;
+
+    printf("\n--- Final File Frame in Binary ---\n");
+    int ch = fgetc(fp);
+    while (ch != EOF) {
+        printByte(ch);
+        printf(" ");
+        ch = fgetc(fp);
+    }
+    printf("\n");
+    fclose(fp);
+}
+
+int main() {
+    printf("Enter Source URL : ");
+    scanf("%s", srcUrl);
+    printf("Enter Destination URL : ");
+    scanf("%s", destUrl);
+
+    printf("\nSTORED VALUES IN STRUCTURE TABLE\n");
+    lookupAddresses();
+
+    printf("Enter Payload (no spaces): ");
+    scanf("%s", payload);
+    payloadLen = strlen(payload);
+
+    printf("Enter Packet Size (in bits): ");
+    scanf("%d", &packetSize);
+    printf("Enter Frame Size (in bits): ");
+    scanf("%d", &frameSize);
+
+    processLayers();
+    writeBinaryFile();
+    readAndPrintBinaryFile();
+
+    return 0;
+}
+
+[24bcs135@mepcolinux ex1]$cc dsen.c
+[24bcs135@mepcolinux ex1]$./a.out
+Enter Source URL : www.google.com
+Enter Destination URL : www.google.com
+
+STORED VALUES IN STRUCTURE TABLE
+Mapped successfully.
+Enter Payload (no spaces): HDLE
+Enter Packet Size (in bits): 24
+Enter Frame Size (in bits): 8
+
+====================================
+APPLICATION LAYER
+====================================
+Application Data : HDLE
+Output stream (Data bits): 01001000 01000100 01001100 01000101
+
+====================================
+TRANSPORT LAYER
+====================================
+Added Segment Headers:
+  Source Port bits     : 1011111111001101
+  Destination Port bits: 1011111111001101
+
+[Appended Output stream] -> Segment (Ports + Data):
+1011111111001101 1011111111001101 01001000 01000100 01001100 01000101
+
+====================================
+NETWORK LAYER
+====================================
+Added IP Packet Headers:
+  Source IP bits     : 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010
+  Destination IP bits: 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010
+
+PACKET 1 (Bits 0 to 23)
+[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):
+00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010  00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010   10111111 11001101 10111111
+
+PACKET 2 (Bits 24 to 47)
+[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):
+00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010  00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010   11001101 01001000 01000100
+
+PACKET 3 (Bits 48 to 71)
+[Appended Output stream] -> Packet (IPs + Ports + Data Sub-slice):
+00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010  00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010   01001100 01000101 00000000
+
+====================================
+DATA LINK LAYER (BYTE-COUNT SYSTEM)
+====================================
+[Byte Count System Tracking Check]:
+  Original Message String : HDLE
+  Payload Byte Count      : 4 bytes (32 bits)
+
+------------------------------------
+PACKET 1 FRAME SEGMENTATION DETAILS
+------------------------------------
+Added Frame MAC Headers:
+  Source MAC bits     : 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+  Destination MAC bits: 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+
+[Appended Output stream Processed inside Frame Windows]:
+  Frame 1 (Bits 0 to 7) -> Full Frame bits:
+      10111111
+  Frame 2 (Bits 8 to 15) -> Full Frame bits:
+      11001101
+  Frame 3 (Bits 16 to 23) -> Full Frame bits:
+      10111111
+
+------------------------------------
+PACKET 2 FRAME SEGMENTATION DETAILS
+------------------------------------
+Added Frame MAC Headers:
+  Source MAC bits     : 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+  Destination MAC bits: 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+
+[Appended Output stream Processed inside Frame Windows]:
+  Frame 1 (Bits 0 to 7) -> Full Frame bits:
+      11001101
+  Frame 2 (Bits 8 to 15) -> Full Frame bits:
+      01001000
+  Frame 3 (Bits 16 to 23) -> Full Frame bits:
+      01000100
+
+------------------------------------
+PACKET 3 FRAME SEGMENTATION DETAILS
+------------------------------------
+Added Frame MAC Headers:
+  Source MAC bits     : 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+  Destination MAC bits: 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010
+
+[Appended Output stream Processed inside Frame Windows]:
+  Frame 1 (Bits 0 to 7) -> Full Frame bits:
+      01001100
+  Frame 2 (Bits 8 to 15) -> Full Frame bits:
+      01000101
+  Frame 3 (Bits 16 to 23) -> Full Frame bits:
+      00000000
+
+Frame written to tx_frame.bin using pure control token syntax.
+
+--- Final File Frame in Binary ---
+01010011 01011001 01001110 01010011 01011001 01001110 01010011 01001111 01001000 00000000 00000100 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 01001000 01000100 01001100 01000101 01001110 01010101 01001100
+[24bcs135@mepcolinux ex1]$cat drec.c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define SYN "SYN"
+#define SOH "SOH"
+#define NUL "NUL"
+
+struct Header
+{
+    int sp;
+    int dp;
+    char sip[20];
+    char dip[20];
+    char smac[20];
+    char dmac[20];
+};
+
+struct Header hd;
+char msg[100];
+int len;
+
+void bin8(int num)
+{
+    int i;
+    for (i = 7; i >= 0; i--)
+    {
+        printf("%d", (num >> i) & 1);
+    }
+}
+
+void bin16(int num)
+{
+    int i;
+    for (i = 15; i >= 0; i--)
+    {
+        printf("%d", (num >> i) & 1);
+    }
+}
+
+void binstr(const char *str)
+{
+    int i;
+    for (i = 0; str[i] != '\0'; i++)
+    {
+        bin8((unsigned char)str[i]);
+        printf(" ");
+    }
+}
+
+void head()
+{
+    printf("  Source IP        : %s\n", hd.sip);
+    printf("  Destination IP   : %s\n", hd.dip);
+    printf("  Source MAC       : %s\n", hd.smac);
+    printf("  Destination MAC  : %s\n", hd.dmac);
+}
+
+void recv()
+{
+    FILE *fp;
+    char fileBuffer[4000];
+    int totalBytes = 0;
+    int ch;
+    int i;
+
+    fp = fopen("tx_frame.bin", "rb");
+    if (fp == NULL)
+    {
+        printf("Error opening file\n");
+        return;
+    }
+
+    printf("====================================\n");
+    printf("PHYSICAL LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Incoming Bitstream detected over physical medium:\n  ");
+
+    while ((ch = fgetc(fp)) != EOF && totalBytes < 4000)
+    {
+        fileBuffer[totalBytes++] = (char)ch;
+        bin8(ch);
+        printf(" ");
+    }
+    printf("\n");
+    fclose(fp);
+
+    printf("\n====================================\n");
+    printf("DATA LINK LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Preamble Alignment Validation:\n");
+
+    char *syn1 = strstr(fileBuffer, SYN);
+    char *syn2 = syn1 ? strstr(syn1 + 3, SYN) : NULL;
+    char *soh  = syn2 ? strstr(syn2 + 3, SOH) : NULL;
+
+    if (!syn1 || !syn2 || !soh || (syn2 != syn1 + 3) || (soh != syn2 + 3))
+    {
+        printf("  Frame error: preamble alignment synchronization failed\n");
+        return;
+    }
+    printf("  SYN SYN SOH validated successfully\n");
+
+    char *lengthPointer = soh + 3;
+    int lenHigh = (unsigned char)lengthPointer[0];
+    int lenLow  = (unsigned char)lengthPointer[1];
+    len = (lenHigh << 8) | lenLow;
+
+    printf("Byte Count System Tracking Check:\n");
+    printf("  Extracted Payload Length count: %d bytes (%d bits)\n", len, len * 8);
+
+    char *headerPointer = lengthPointer + 2;
+
+
+    memcpy(hd.sip, headerPointer, 20);
+    hd.sip[19] = '\0';
+    headerPointer += 20;
+
+    memcpy(hd.dip, headerPointer, 20);
+    hd.dip[19] = '\0';
+    headerPointer += 20;
+
+    memcpy(hd.smac, headerPointer, 20);
+    hd.smac[19] = '\0';
+    headerPointer += 20;
+
+    memcpy(hd.dmac, headerPointer, 20);
+    hd.dmac[19] = '\0';
+    headerPointer += 20;
+
+
+    hd.sp = 49101;
+    hd.dp = 9208;
+
+    char *payloadPointer = headerPointer;
+    for (i = 0; i < len; i++)
+    {
+        msg[i] = payloadPointer[i];
+    }
+    msg[len] = '\0';
+
+    char *nulCheck = strstr(payloadPointer + len, NUL);
+    if (nulCheck)
+    {
+        printf("  NUL Boundary Validation: Success\n");
+    }
+    else
+    {
+        printf("  Warning: NUL Boundary Validation Mismatch\n");
+    }
+
+    printf("\n====================================\n");
+    printf("NETWORK LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Extracted IP Packet Headers:\n");
+    head();
+
+    printf("\nRemaining Stream payload moving up:\n  ");
+    bin16(hd.sp); printf(" ");
+    bin16(hd.dp); printf(" ");
+    binstr(msg);
+    printf("\n");
+
+    printf("\n====================================\n");
+    printf("TRANSPORT LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Extracted TCP/UDP Segment Headers:\n");
+    printf("  Source Port      : %d\n", hd.sp);
+    printf("  Destination Port : %d\n", hd.dp);
+
+    printf("\nRemaining Stream payload moving up:\n  ");
+    binstr(msg);
+    printf("\n");
+
+    printf("\n====================================\n");
+    printf("APPLICATION LAYER DECAPSULATION\n");
+    printf("====================================\n");
+    printf("Extracted Message: %s\n", msg);
+}
+
+int main()
+{
+    recv();
+    return 0;
+}
+
+[24bcs135@mepcolinux ex1]$cc drec.c
+[24bcs135@mepcolinux ex1]$./a.out
+====================================
+PHYSICAL LAYER DECAPSULATION
+====================================
+Incoming Bitstream detected over physical medium:
+  01010011 01011001 01001110 01010011 01011001 01001110 01010011 01001111 01001000 00000000 00000100 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00110001 00111001 00110010 00101110 00110001 00110110 00111000 00101110 00110001 00101110 00110010 00110100 00110010 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 00110100 00110011 00111010 00110101 00110000 00111010 00111001 00110100 00111010 00110010 00110101 00111010 00110100 00111001 00111010 00110001 00110010 00000000 00000000 00000000 01001000 01000100 01001100 01000101 01001110 01010101 01001100
+
+====================================
+DATA LINK LAYER DECAPSULATION
+====================================
+Preamble Alignment Validation:
+  SYN SYN SOH validated successfully
+Byte Count System Tracking Check:
+  Extracted Payload Length count: 4 bytes (32 bits)
+  NUL Boundary Validation: Success
+
+====================================
+NETWORK LAYER DECAPSULATION
+====================================
+Extracted IP Packet Headers:
+  Source IP        : 192.168.1.242
+  Destination IP   : 192.168.1.242
+  Source MAC       : 43:50:94:25:49:12
+  Destination MAC  : 43:50:94:25:49:12
+
+Remaining Stream payload moving up:
+  1011111111001101 0010001111111000 01001000 01000100 01001100 01000101
+
+====================================
+TRANSPORT LAYER DECAPSULATION
+====================================
+Extracted TCP/UDP Segment Headers:
+  Source Port      : 49101
+  Destination Port : 9208
+
+Remaining Stream payload moving up:
+  01001000 01000100 01001100 01000101
+
+====================================
+APPLICATION LAYER DECAPSULATION
+====================================
+Extracted Message: HDLE

@@ -1,0 +1,1440 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8085
+#define MAX_SIZE 2000
+
+int receive_all(int socket_fd, char *buffer, int length)
+{
+    int total = 0;
+
+    while (total < length)
+    {
+        int received = recv(socket_fd,
+                            buffer + total,
+                            length - total,
+                            0);
+
+        if (received <= 0)
+        {
+            return -1;
+        }
+
+        total += received;
+    }
+
+    return total;
+}
+
+int toDecimal(char byte[])
+{
+    int value = 0;
+
+    for (int i = 0; i < 8; i++)
+    {
+        value = value * 2 + (byte[i] - '0');
+    }
+
+    return value;
+}
+
+void display_binary(char data[])
+{
+    for (int i = 0; data[i] != '\0'; i++)
+    {
+        printf("%c", data[i]);
+
+        if ((i + 1) % 8 == 0)
+        {
+            printf(" ");
+        }
+    }
+
+    printf("\n");
+}
+
+/*
+   Remove byte stuffing
+
+   ESC  = 01111101
+   FLAG = 01111110
+*/
+void byteUnstuffing(char stuffed[], char unstuffed[])
+{
+    int i;
+    int k = 0;
+
+    for (i = 0; stuffed[i] != '\0'; i += 8)
+    {
+        char byte[9];
+
+        strncpy(byte, stuffed + i, 8);
+        byte[8] = '\0';
+
+        if (strcmp(byte, "01111101") == 0)
+        {
+            i += 8;
+
+            if (stuffed[i] == '\0')
+            {
+                break;
+            }
+
+            strncpy(unstuffed + k, stuffed + i, 8);
+            k += 8;
+        }
+        else
+        {
+            strcpy(unstuffed + k, byte);
+            k += 8;
+        }
+    }
+
+    unstuffed[k] = '\0';
+}
+
+void calculateChecksum(char binary[], char checksum[])
+{
+    int sum = 0;
+    char byte[9];
+
+    for (int i = 0; binary[i] != '\0'; i += 8)
+    {
+        strncpy(byte, binary + i, 8);
+        byte[8] = '\0';
+
+        sum += toDecimal(byte);
+
+        /*
+           End-around carry
+        */
+        while (sum > 255)
+        {
+            sum = (sum & 255) + (sum >> 8);
+        }
+    }
+
+    /*
+       One's complement
+    */
+    sum = 255 - sum;
+
+    for (int i = 7; i >= 0; i--)
+    {
+        checksum[i] = (sum % 2) + '0';
+        sum = sum / 2;
+    }
+
+    checksum[8] = '\0';
+}
+
+void binaryToText(char binary[], char text[])
+{
+    int k = 0;
+
+    for (int i = 0; binary[i] != '\0'; i += 8)
+    {
+        char byte[9];
+
+        strncpy(byte, binary + i, 8);
+        byte[8] = '\0';
+
+        text[k++] = (char)toDecimal(byte);
+    }
+
+    text[k] = '\0';
+}
+
+int main()
+{
+    int server_fd;
+    int client_fd;
+    int option = 1;
+
+    int data_length;
+    int network_length;
+
+    struct sockaddr_in server;
+    struct sockaddr_in client;
+
+    socklen_t client_length;
+
+    char received_data[MAX_SIZE];
+    char unstuffed_data[MAX_SIZE];
+
+    char original_data[MAX_SIZE];
+    char received_checksum[9];
+    char calculated_checksum[9];
+
+    char received_text[MAX_SIZE];
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_fd < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    if (setsockopt(server_fd,
+                   SOL_SOCKET,
+                   SO_REUSEADDR,
+                   &option,
+                   sizeof(option)) < 0)
+    {
+        perror("setsockopt failed");
+        close(server_fd);
+        return 1;
+    }
+
+    memset(&server, 0, sizeof(server));
+
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = htonl(INADDR_ANY);
+    server.sin_port = htons(PORT);
+
+    if (bind(server_fd,
+             (struct sockaddr *)&server,
+             sizeof(server)) < 0)
+    {
+        perror("Bind failed");
+        close(server_fd);
+        return 1;
+    }
+
+    if (listen(server_fd, 5) < 0)
+    {
+        perror("Listen failed");
+        close(server_fd);
+        return 1;
+    }
+
+    printf("====================================\n");
+    printf("          CHECKSUM SERVER\n");
+    printf("====================================\n");
+    printf("Server waiting for client...\n");
+
+    client_length = sizeof(client);
+
+    client_fd = accept(server_fd,
+                       (struct sockaddr *)&client,
+                       &client_length);
+
+    if (client_fd < 0)
+    {
+        perror("Accept failed");
+        close(server_fd);
+        return 1;
+    }
+
+    printf("Client connected successfully.\n");
+
+    /*
+       Receive data length
+    */
+    if (receive_all(client_fd,
+                    (char *)&network_length,
+                    sizeof(network_length)) < 0)
+    {
+        printf("Failed to receive data length.\n");
+        close(client_fd);
+        close(server_fd);
+        return 1;
+    }
+
+    data_length = ntohl(network_length);
+
+    if (data_length <= 0 || data_length >= MAX_SIZE)
+    {
+        printf("Invalid data length.\n");
+        close(client_fd);
+        close(server_fd);
+        return 1;
+    }
+
+    /*
+       Receive stuffed data
+    */
+    if (receive_all(client_fd,
+                    received_data,
+                    data_length) < 0)
+    {
+        printf("Failed to receive data.\n");
+        close(client_fd);
+        close(server_fd);
+        return 1;
+    }
+
+    received_data[data_length] = '\0';
+
+    printf("\nStuffed data received:\n");
+    display_binary(received_data);
+
+    /*
+       Remove byte stuffing
+    */
+    byteUnstuffing(received_data, unstuffed_data);
+
+    printf("\nAfter byte unstuffing:\n");
+    display_binary(unstuffed_data);
+
+    int unstuffed_length = strlen(unstuffed_data);
+
+    /*
+       Original data + 8-bit checksum
+    */
+    if (unstuffed_length < 16 ||
+        unstuffed_length % 8 != 0)
+    {
+        printf("\nInvalid packet format.\n");
+
+        close(client_fd);
+        close(server_fd);
+        return 1;
+    }
+
+    /*
+       Last 8 bits are received checksum
+    */
+    int original_length = unstuffed_length - 8;
+
+    strncpy(original_data,
+            unstuffed_data,
+            original_length);
+
+    original_data[original_length] = '\0';
+
+    strncpy(received_checksum,
+            unstuffed_data + original_length,
+            8);
+
+    received_checksum[8] = '\0';
+
+    /*
+       Calculate checksum again
+    */
+    calculateChecksum(original_data, calculated_checksum);
+
+    printf("\nReceived checksum  : %s\n",
+           received_checksum);
+
+    printf("Calculated checksum: %s\n",
+           calculated_checksum);
+
+    /*
+       Verify checksum
+    */
+    if (strcmp(received_checksum,
+               calculated_checksum) != 0)
+    {
+        printf("\nChecksum verification failed.\n");
+        printf("Error detected in received data.\n");
+        printf("Received text will not be displayed.\n");
+    }
+    else
+    {
+        binaryToText(original_data, received_text);
+
+        printf("\nChecksum verification successful.\n");
+        printf("No error detected.\n");
+        printf("Received text: %s\n", received_text);
+    }
+
+    close(client_fd);
+    close(server_fd);
+
+    printf("\nServer closed\n");
+
+    return 0;
+}
+
+[24bcs135@mepcolinux newop]$cat checkclient.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8085
+#define MAX_TEXT 100
+#define MAX_BINARY 1000
+#define MAX_STUFFED 2000
+
+void toBinary(char text[], char binary[])
+{
+    int k = 0;
+
+    for (int i = 0; text[i] != '\0'; i++)
+    {
+        unsigned char value = text[i];
+
+        for (int j = 7; j >= 0; j--)
+        {
+            binary[k++] = ((value >> j) & 1) + '0';
+        }
+    }
+
+    binary[k] = '\0';
+}
+
+void display(char binary[])
+{
+    for (int i = 0; binary[i] != '\0'; i++)
+    {
+        printf("%c", binary[i]);
+
+        if ((i + 1) % 8 == 0)
+        {
+            printf(" ");
+        }
+    }
+
+    printf("\n");
+}
+
+int toDecimal(char byte[])
+{
+    int value = 0;
+
+    for (int i = 0; i < 8; i++)
+    {
+        value = value * 2 + (byte[i] - '0');
+    }
+
+    return value;
+}
+
+void calculateChecksum(char binary[], char checksum[])
+{
+    int sum = 0;
+    char byte[9];
+
+    for (int i = 0; binary[i] != '\0'; i += 8)
+    {
+        strncpy(byte, binary + i, 8);
+        byte[8] = '\0';
+
+        sum += toDecimal(byte);
+        while (sum > 255)
+        {
+            sum = (sum & 255) + (sum >> 8);
+        }
+    }
+
+    /*
+       One's complement
+    */
+    sum = 255 - sum;
+
+    for (int i = 7; i >= 0; i--)
+    {
+        checksum[i] = (sum % 2) + '0';
+        sum = sum / 2;
+    }
+
+    checksum[8] = '\0';
+}
+
+/*
+   Byte stuffing
+
+   ESC  = 01111101
+   FLAG = 01111110
+*/
+void byteStuffing(char data[], char stuffed[])
+{
+    int k = 0;
+
+    for (int i = 0; data[i] != '\0'; i += 8)
+    {
+        char byte[9];
+
+        strncpy(byte, data + i, 8);
+        byte[8] = '\0';
+
+        if (strcmp(byte, "01111101") == 0)
+        {
+            strcpy(stuffed + k,
+                   "0111110101111101");
+
+            k += 16;
+        }
+        else if (strcmp(byte, "01111110") == 0)
+        {
+            strcpy(stuffed + k,
+                   "0111110101111110");
+
+            k += 16;
+        }
+        else
+        {
+            strcpy(stuffed + k, byte);
+            k += 8;
+        }
+    }
+
+    stuffed[k] = '\0';
+}
+
+void introduceError(char data[])
+{
+    int choice;
+    int count;
+    int position;
+
+    printf("\nIntroduce error? (1.Yes / 0.No): ");
+    scanf("%d", &choice);
+
+    if (choice == 1)
+    {
+        printf("How many bits do you want to modify? : ");
+        scanf("%d", &count);
+
+        for (int i = 0; i < count; i++)
+        {
+            printf("Enter bit index (0-%lu): ",
+                   strlen(data) - 1);
+
+            scanf("%d", &position);
+
+            if (position >= 0 &&
+                position < (int)strlen(data))
+            {
+                if (data[position] == '0')
+                {
+                    data[position] = '1';
+                }
+                else
+                {
+                    data[position] = '0';
+                }
+
+                printf("Bit %d flipped successfully.\n",
+                       position);
+            }
+            else
+            {
+                printf("Invalid bit index.\n");
+                i--;
+            }
+        }
+    }
+}
+
+int send_all(int socket_fd,
+             const char *buffer,
+             int length)
+{
+    int total = 0;
+
+    while (total < length)
+    {
+        int sent = send(socket_fd,
+                        buffer + total,
+                        length - total,
+                        0);
+
+        if (sent <= 0)
+        {
+            return -1;
+        }
+
+        total += sent;
+    }
+
+    return total;
+}
+
+int main()
+{
+    int socket_fd;
+    int length;
+    int network_length;
+
+    struct sockaddr_in server;
+
+    char server_ip[INET_ADDRSTRLEN];
+
+    char text[MAX_TEXT];
+    char binary[MAX_BINARY];
+    char checksum[9];
+    char packet[MAX_BINARY];
+    char stuffed[MAX_STUFFED];
+
+    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (socket_fd < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    printf("====================================\n");
+    printf("          CHECKSUM CLIENT\n");
+    printf("====================================\n");
+
+    printf("Enter Server IP Address: ");
+    scanf("%15s", server_ip);
+
+    memset(&server, 0, sizeof(server));
+
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+
+    if (inet_pton(AF_INET,
+                  server_ip,
+                  &server.sin_addr) <= 0)
+    {
+        printf("Invalid IP address.\n");
+        close(socket_fd);
+        return 1;
+    }
+
+    if (connect(socket_fd,
+                (struct sockaddr *)&server,
+                sizeof(server)) < 0)
+    {
+        perror("Connection failed");
+        close(socket_fd);
+        return 1;
+    }
+
+    printf("Connected to server successfully.\n");
+
+    /*
+       Read input text
+    */
+    printf("\nEnter string: ");
+    scanf(" %[^\n]", text);
+
+    /*
+       Convert text to binary
+    */
+    toBinary(text, binary);
+
+    printf("\nBinary data:\n");
+    display(binary);
+
+    /*
+       Calculate checksum
+    */
+    calculateChecksum(binary, checksum);
+
+    printf("\nChecksum: %s\n", checksum);
+
+    /*
+       Create packet:
+       binary data + checksum
+    */
+    strcpy(packet, binary);
+    strcat(packet, checksum);
+
+    printf("\nPacket before byte stuffing:\n");
+    display(packet);
+
+    /*
+       Apply byte stuffing
+    */
+    byteStuffing(packet, stuffed);
+
+    printf("\nAfter byte stuffing:\n");
+    display(stuffed);
+
+    /*
+       Introduce optional error
+    */
+    introduceError(stuffed);
+
+    printf("\nData sent:\n");
+    display(stuffed);
+
+    /*
+       Send stuffed data length
+    */
+    length = strlen(stuffed);
+    network_length = htonl(length);
+
+    if (send_all(socket_fd,
+                 (char *)&network_length,
+                 sizeof(network_length)) < 0)
+    {
+        perror("Length sending failed");
+        close(socket_fd);
+        return 1;
+    }
+
+    /*
+       Send actual stuffed data
+    */
+    if (send_all(socket_fd,
+                 stuffed,
+                 length) < 0)
+    {
+        perror("Data sending failed");
+        close(socket_fd);
+        return 1;
+    }
+
+    printf("\nData sent successfully.\n");
+
+    close(socket_fd);
+
+    printf("Client closed\n");
+
+    return 0;
+}
+
+[24bcs135@mepcolinux newop]$gcc checkserver -o checkserver
+checkserver: file not recognized: File truncated
+collect2: error: ld returned 1 exit status
+[24bcs135@mepcolinux newop]$gcc checkserver -o checkserver
+[24bcs135@mepcolinux newop]$./checkserver
+Bind failed: Address already in use
+[24bcs135@mepcolinux newop]$./checkserver 172.16.16.200 3434
+====================================
+          CHECKSUM SERVER
+====================================
+Server waiting for client...
+
+[24bcs135@mepcolinux newop]$gcc checkclient.c -std=c99 -o checkclient
+[24bcs135@mepcolinux newop]$./checkclient 172.16.16.200 3434
+====================================
+          CHECKSUM CLIENT
+====================================
+Enter Server IP Address: 172.16.16.200
+Connected to server successfully.
+
+Enter string: quintet
+
+Binary data:
+01110001 01110101 01101001 01101110 01110100 01100101 01110100
+
+Checksum: 11110010
+
+Packet before byte stuffing:
+01110001 01110101 01101001 01101110 01110100 01100101 01110100 11110010
+
+After byte stuffing:
+01110001 01110101 01101001 01101110 01110100 01100101 01110100 11110010
+
+Introduce error? (1.Yes / 0.No): 1
+How many bits do you want to modify? : 1
+Enter bit index (0-63): 0
+Bit 0 flipped successfully.
+
+Data sent:
+11110001 01110101 01101001 01101110 01110100 01100101 01110100 11110010
+
+Data sent successfully.
+Client closed
+
+//server
+
+Client connected successfully.
+
+Stuffed data received:
+11110001 01110101 01101001 01101110 01110100 01100101 01110100 11110010
+
+After byte unstuffing:
+11110001 01110101 01101001 01101110 01110100 01100101 01110100 11110010
+
+Received checksum  : 11110010
+Calculated checksum: 01110010
+
+          CHECKSUM CLIENT
+====================================
+Enter Server IP Address: 172.16.16.200
+Connected to server successfully.
+
+Enter string: abi
+
+Binary data:
+01100001 01100010 01101001
+
+Checksum: 11010010
+
+Packet before byte stuffing:
+01100001 01100010 01101001 11010010
+
+After byte stuffing:
+01100001 01100010 01101001 11010010
+
+Introduce error? (1.Yes / 0.No): 0
+
+Data sent:
+01100001 01100010 01101001 11010010
+
+Data sent successfully.
+Client closed
+
+//server
+
+Client connected successfully.
+
+Stuffed data received:
+01100001 01100010 01101001 11010010
+
+After byte unstuffing:
+01100001 01100010 01101001 11010010
+
+Received checksum  : 11010010
+Calculated checksum: 11010010
+
+Checksum verification successful.
+No error detected.
+Received text: abi
+
+Server closed
+[24bcs135@mepcolinux newop]$cat arrserver.c
+#define HEADER_H
+#define HEADER_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define SERV_PORT 5000
+#define MAX 100
+
+
+int create_socket(void);
+void setup_server(int ls, struct sockaddr_in *servAddr);
+int accept_client(int ls, struct sockaddr_in *clientAddr,
+                  socklen_t *clientAddrLen);
+int receive_array(int s, int arr[]);
+void send_array(int s, int arr[], int n);
+
+int create_socket(void)
+{
+    int ls;
+
+    ls = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (ls < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return ls;
+}
+
+void setup_server(int ls, struct sockaddr_in *servAddr)
+{
+    int opt = 1;
+
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    memset(servAddr, 0, sizeof(*servAddr));
+
+    servAddr->sin_family = AF_INET;
+
+    // All available network interfaces
+    servAddr->sin_addr.s_addr = htonl(INADDR_ANY);
+
+    servAddr->sin_port = htons(SERV_PORT);
+
+    if (bind(ls, (struct sockaddr *)servAddr,
+             sizeof(*servAddr)) < 0)
+    {
+        perror("Binding failed");
+        close(ls);
+        exit(1);
+    }
+
+    if (listen(ls, 5) < 0)
+    {
+        perror("Listening failed");
+        close(ls);
+        exit(1);
+    }
+}
+
+int accept_client(int ls, struct sockaddr_in *clientAddr,
+                  socklen_t *clientAddrLen)
+{
+    int s;
+
+    *clientAddrLen = sizeof(*clientAddr);
+
+    s = accept(ls, (struct sockaddr *)clientAddr,
+               clientAddrLen);
+
+    if (s < 0)
+    {
+        perror("Accept failed");
+        close(ls);
+        exit(1);
+    }
+
+    return s;
+}
+
+int receive_array(int s, int arr[])
+{
+    int n;
+
+    if (recv(s, &n, sizeof(n), 0) <= 0)
+    {
+        perror("Receiving size failed");
+        exit(1);
+    }
+
+    if (n < 0 || n > MAX)
+    {
+        printf("Invalid array size received.\n");
+        exit(1);
+    }
+
+    if (recv(s, arr, sizeof(int) * n, 0) <= 0)
+    {
+        perror("Receiving array failed");
+        exit(1);
+    }
+
+    return n;
+}
+
+void send_array(int s, int arr[], int n)
+{
+    send(s, &n, sizeof(n), 0);
+    send(s, arr, sizeof(int) * n, 0);
+}
+
+int main(void)
+{
+    int ls, s;
+    int arr[MAX];
+    int n, i;
+
+    struct sockaddr_in servAddr;
+    struct sockaddr_in clientAddr;
+    socklen_t clientAddrLen;
+
+    ls = create_socket();
+
+    setup_server(ls, &servAddr);
+
+    printf("TCP Server started...\n");
+    printf("Port number: %d\n", SERV_PORT);
+    printf("Waiting for client...\n");
+
+    s = accept_client(ls, &clientAddr, &clientAddrLen);
+
+    printf("Client connected.\n");
+
+    n = receive_array(s, arr);
+
+    printf("Array received from client:\n");
+
+    for (i = 0; i < n; i++)
+    {
+        printf("%d ", arr[i]);
+    }
+
+    printf("\n");
+
+    send_array(s, arr, n);
+
+    printf("Array sent back to client.\n");
+
+    close(s);
+    close(ls);
+
+    printf("Server closed.\n");
+
+    return 0;
+}
+[24bcs135@mepcolinux newop]$cat arrclient.c
+#define HEADER_H
+#define HEADER_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define SERV_PORT 5000
+#define MAX 100
+
+
+
+int create_socket(void);
+void connect_server(int s, struct sockaddr_in *servAddr);
+int get_array(int arr[]);
+void send_array(int s, int arr[], int n);
+int receive_array(int s, int arr[]);
+
+int create_socket(void)
+{
+    int s;
+
+    s = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (s < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return s;
+}
+
+void connect_server(int s, struct sockaddr_in *servAddr)
+{
+    char serverIP[INET_ADDRSTRLEN];
+
+    printf("Enter server IP address: ");
+    scanf("%15s", serverIP);
+
+    memset(servAddr, 0, sizeof(*servAddr));
+
+    servAddr->sin_family = AF_INET;
+    servAddr->sin_port = htons(SERV_PORT);
+
+    if (inet_pton(AF_INET, serverIP,
+                  &servAddr->sin_addr) <= 0)
+    {
+        printf("Invalid IP address.\n");
+        close(s);
+        exit(1);
+    }
+
+    if (connect(s, (struct sockaddr *)servAddr,
+                sizeof(*servAddr)) < 0)
+    {
+        perror("Connection failed");
+        close(s);
+        exit(1);
+    }
+}
+
+int get_array(int arr[])
+{
+    int n, i;
+
+    printf("Enter number of elements: ");
+    scanf("%d", &n);
+
+    if (n <= 0 || n > MAX)
+    {
+        printf("Invalid number of elements.\n");
+        exit(1);
+    }
+
+    printf("Enter %d elements separated by comma: ", n);
+
+    for (i = 0; i < n; i++)
+    {
+        scanf("%d", &arr[i]);
+
+        if (i < n - 1)
+        {
+            scanf(" ,");
+        }
+    }
+
+    return n;
+}
+
+void send_array(int s, int arr[], int n)
+{
+    send(s, &n, sizeof(n), 0);
+    send(s, arr, sizeof(int) * n, 0);
+}
+
+int receive_array(int s, int arr[])
+{
+    int n;
+
+    if (recv(s, &n, sizeof(n), 0) <= 0)
+    {
+        perror("Receiving size failed");
+        exit(1);
+    }
+
+    if (n < 0 || n > MAX)
+    {
+        printf("Invalid array size received.\n");
+        exit(1);
+    }
+
+    if (recv(s, arr, sizeof(int) * n, 0) <= 0)
+    {
+        perror("Receiving array failed");
+        exit(1);
+    }
+
+    return n;
+}
+
+int main(void)
+{
+    int s;
+    int arr[MAX];
+    int n, i;
+
+    struct sockaddr_in servAddr;
+
+    s = create_socket();
+
+    connect_server(s, &servAddr);
+
+    printf("Connected to TCP Server.\n");
+
+    n = get_array(arr);
+
+    send_array(s, arr, n);
+
+    printf("\nArray sent to server.\n");
+
+    n = receive_array(s, arr);
+
+    printf("Array received from server:\n");
+
+    for (i = 0; i < n; i++)
+    {
+        printf("%d ", arr[i]);
+    }
+
+    printf("\n");
+
+    close(s);
+
+    printf("Client closed.\n");
+
+    return 0;
+}
+[24bcs135@mepcolinux newop]$gcc arrserver.c -std=c99 -o arrserver
+[24bcs135@mepcolinux newop]$./arrserver
+
+TCP Server started...
+Port number: 5000
+Waiting for client...
+
+[24bcs135@mepcolinux newop]$gcc arrclient.c -std=c99 -o arrclient
+[24bcs135@mepcolinux newop]$./arrclient
+Enter server IP address: 172.16.16.200
+Connected to TCP Server.
+Enter number of elements: 5
+Enter 5 elements separated by comma: 3,1,9,4,7
+
+Array sent to server.
+Array received from server:
+3 1 9 4 7
+Client closed.
+
+//server
+
+Client connected.
+Array received from client:
+3 1 9 4 7
+Array sent back to client.
+Server closed.
+
+
+[24bcs135@mepcolinux newop]$cat sumserver.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define SERV_PORT 8000
+#define MAX 100
+
+int create_socket(void);
+int calculate_sum(int arr[], int n);
+
+int main(void)
+{
+    int ls, s;
+    int arr[MAX];
+    int n, sum;
+    int i;
+
+    struct sockaddr_in servAddr;
+    struct sockaddr_in clientAddr;
+    socklen_t clientAddrLen;
+
+    ls = create_socket();
+
+    memset(&servAddr, 0, sizeof(servAddr));
+
+    servAddr.sin_family = AF_INET;
+
+    servAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    servAddr.sin_port = htons(SERV_PORT);
+
+    if (bind(ls, (struct sockaddr *)&servAddr,
+             sizeof(servAddr)) < 0)
+    {
+        perror("Binding failed");
+        close(ls);
+        return 1;
+    }
+
+    if (listen(ls, 5) < 0)
+    {
+        perror("Listening failed");
+        close(ls);
+        return 1;
+    }
+
+    printf("TCP Server started...\n");
+    printf("Port number: %d\n", SERV_PORT);
+    printf("Waiting for client...\n");
+
+    clientAddrLen = sizeof(clientAddr);
+
+    s = accept(ls, (struct sockaddr *)&clientAddr,
+               &clientAddrLen);
+
+    if (s < 0)
+    {
+        perror("Accept failed");
+        close(ls);
+        return 1;
+    }
+
+    printf("Client connected.\n");
+
+    if (recv(s, &n, sizeof(n), 0) <= 0)
+    {
+        perror("Receiving number of elements failed");
+        close(s);
+        close(ls);
+        return 1;
+    }
+
+    if (n <= 0 || n > MAX)
+    {
+        printf("Invalid number of elements received.\n");
+        close(s);
+        close(ls);
+        return 1;
+    }
+
+    if (recv(s, arr, sizeof(int) * n, 0) <= 0)
+    {
+        perror("Receiving array failed");
+        close(s);
+        close(ls);
+        return 1;
+    }
+
+    printf("Array received from client:\n");
+
+    for (i = 0; i < n; i++)
+    {
+        printf("%d ", arr[i]);
+    }
+
+    printf("\n");
+
+    sum = calculate_sum(arr, n);
+
+    printf("Sum of array = %d\n", sum);
+
+    send(s, &sum, sizeof(sum), 0);
+
+    printf("Sum sent to client.\n");
+
+    close(s);
+    close(ls);
+
+    printf("Server closed.\n");
+
+    return 0;
+}
+
+int create_socket(void)
+{
+    int ls;
+
+    ls = socket(AF_INET, SOCK_STREAM, 0);
+
+    printf("Sum sent to client.\n");
+
+    close(s);
+    close(ls);
+
+    printf("Server closed.\n");
+
+    return 0;
+}
+
+int create_socket(void)
+{
+    int ls;
+
+    ls = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (ls < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return ls;
+}
+
+int calculate_sum(int arr[], int n)
+{
+    int sum = 0;
+    int i;
+
+    for (i = 0; i < n; i++)
+    {
+        sum = sum + arr[i];
+    }
+
+    return sum;
+}
+[24bcs135@mepcolinux newop]$cat sumclient.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define SERV_PORT 5000
+#define MAX 100
+
+int create_socket(void);
+
+int main(void)
+{
+    int s;
+    int arr[MAX];
+    int n, i;
+    int sum;
+
+    char serverIP[INET_ADDRSTRLEN];
+
+    struct sockaddr_in servAddr;
+
+    s = create_socket();
+
+    printf("Enter server IP address: ");
+    scanf("%15s", serverIP);
+
+    memset(&servAddr, 0, sizeof(servAddr));
+
+    servAddr.sin_family = AF_INET;
+    servAddr.sin_port = htons(SERV_PORT);
+
+    if (inet_pton(AF_INET, serverIP,
+                  &servAddr.sin_addr) <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(s);
+        return 1;
+    }
+
+    if (connect(s, (struct sockaddr *)&servAddr,
+                sizeof(servAddr)) < 0)
+    {
+        perror("Connection failed");
+        close(s);
+        return 1;
+    }
+
+    printf("Connected to TCP Server.\n");
+
+    printf("Enter number of elements: ");
+    scanf("%d", &n);
+
+    if (n <= 0 || n > MAX)
+    {
+        printf("Invalid number of elements.\n");
+        close(s);
+        return 1;
+    }
+
+    printf("Enter %d elements separated by comma: ", n);
+
+    for (i = 0; i < n; i++)
+    {
+        scanf("%d", &arr[i]);
+
+        if (i < n - 1)
+        {
+            scanf(" ,");
+        }
+    }
+
+    send(s, &n, sizeof(n), 0);
+    send(s, arr, sizeof(int) * n, 0);
+
+    printf("\nArray sent to server.\n");
+
+    if (recv(s, &sum, sizeof(sum), 0) <= 0)
+    {
+        perror("Receiving sum failed");
+        close(s);
+        return 1;
+    }
+
+    printf("Sum received from server = %d\n", sum);
+
+    close(s);
+
+    printf("Receiver closed.\n");
+
+    return 0;
+}
+
+int create_socket(void)
+{
+    int s;
+
+    s = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (s < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    return s;
+}
+[24bcs127@mepcolinux cer3]$cc sumserver.c
+[24bcs127@mepcolinux cer3]$./a.out 172.16.16.200 3124
+Enter no of elements: 6
+Enter elements:
+3
+9
+1
+3
+7
+4
+Send to client....
+
+[24bcs127@mepcolinux cer3]$cc sumclient3.c
+[24bcs127@mepcolinux cer3]$./a.out 172.16.16.200 3124
+Enter no of elements: 6
+Enter elements:
+3
+9
+1
+3
+7
+4
+sum received
+Answer: 27
