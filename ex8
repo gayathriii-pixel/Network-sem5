@@ -1,0 +1,168 @@
+[24bcs135@mepcolinux ex5]$cat ex5.prn
+Script started on Mon Sep 21 16:34:00 2026
+[24bcs135@mepcolinux ex5]$cat calc.l
+%{
+#include <stdlib.h>
+#include "y.tab.h"
+
+
+extern int yylval;
+%}
+
+%%
+
+[0-9]+  {
+            yylval = atoi(yytext);
+            return NUMBER;
+        }
+
+"+"     { return ADD; }
+"-"     { return SUB; }
+"*"     { return MUL; }
+"/"     { return DIV; }
+"%"     { return MOD; }
+"^"     { return POW; }
+"("     { return LPAREN; }
+")"     { return RPAREN; }
+\n      { return NEWLINE; }
+[ \t]   ;
+.       { printf("Invalid character: %s\n", yytext); }
+
+%%
+
+int yywrap() {
+    return 1;
+}
+
+
+[24bcs135@mepcolinux ex5]$cat calc.y
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+void yyerror(const char *s);
+int yylex(void);
+%}
+
+%token NUMBER
+%token ADD SUB MUL DIV MOD POW LPAREN RPAREN NEWLINE
+
+%left ADD SUB
+%left MUL DIV MOD
+%right POW
+
+%%
+
+calculation:
+
+    | calculation line
+    ;
+
+line:
+    NEWLINE
+    | exp NEWLINE {
+        printf("Production used: line -> exp NEWLINE\n");
+        printf("Result: %d\n\n", $1);
+    }
+    ;
+
+exp:
+    NUMBER          {
+                        printf("Production used: exp -> NUMBER (%d)\n", $1);
+                        $$ = $1;
+                    }
+    | exp ADD exp   {
+                        printf("Production used: exp -> exp ADD exp (%d + %d)\n", $1, $3);
+                        $$ = $1 + $3;
+                    }
+    | exp SUB exp   {
+                        printf("Production used: exp -> exp SUB exp (%d - %d)\n", $1, $3);
+                        $$ = $1 - $3;
+                    }
+    | exp MUL exp   {
+                        printf("Production used: exp -> exp MUL exp (%d * %d)\n", $1, $3);
+                        $$ = $1 * $3;
+                    }
+    | exp DIV exp   {
+                        printf("Production used: exp -> exp DIV exp (%d / %d)\n", $1, $3);
+                        if ($3 == 0) {
+                            yyerror("Error: Division by zero");
+                            $$ = 0;
+                        } else {
+                            $$ = $1 / $3;
+                        }
+                    }
+    | exp MOD exp   {
+                        printf("Production used: exp -> exp MOD exp (%d %% %d)\n", $1, $3);
+                        if ($3 == 0) {
+                            yyerror("Error: Modulo by zero");
+                            $$ = 0;
+                        } else {
+                            $$ = $1 % $3;
+                        }
+                    }
+    | exp POW exp   {
+                        printf("Production used: exp -> exp POW exp (%d ^ %d)\n", $1, $3);
+                        $$ = (int)pow($1, $3);
+                    }
+    | LPAREN exp RPAREN {
+                        printf("Production used: exp -> LPAREN exp RPAREN\n");
+                        $$ = $2;
+                    }
+    ;
+
+%%
+
+void yyerror(const char *s) {
+    fprintf(stderr, "%s\n", s);
+}
+
+int main(void) {
+    printf("Enter expression (e.g., 2 + 3 * 4 or 2^3%%3):\n");
+    yyparse();
+    return 0;
+}
+[24bcs135@mepcolinux ex5]$./calc
+Enter expression (e.g., 2 + 3 * 4 or 2^3%3):
+3+5-6^2
+Production used: exp -> NUMBER (3)
+Production used: exp -> NUMBER (5)
+Production used: exp -> exp ADD exp (3 + 5)
+Production used: exp -> NUMBER (6)
+Production used: exp -> NUMBER (2)
+Production used: exp -> exp POW exp (6 ^ 2)
+Production used: exp -> exp SUB exp (8 - 36)
+Production used: line -> exp NEWLINE
+Result: -28
+
+^Z
+[1]+  Stopped                 ./calc
+[24bcs135@mepcolinux ex5]$./calc
+Enter expression (e.g., 2 + 3 * 4 or 2^3%3):
+5
+Production used: exp -> NUMBER (5)
+Production used: line -> exp NEWLINE
+Result: 5
+
+^Z
+[2]+  Stopped                 ./calc
+[24bcs135@mepcolinux ex5]$./calc
+Enter expression (e.g., 2 + 3 * 4 or 2^3%3):
+gayu
+Invalid character: g
+Invalid character: a
+Invalid character: y
+Invalid character: u
+^Z
+[3]+  Stopped                 ./calc
+[24bcs135@mepcolinux ex5]$exit
+exit
+There are stopped jobs.
+[24bcs135@mepcolinux ex5]$exit
+exit
+
+Script done on Mon Sep 21 16:34:47 2026
+[24bcs135@mepcolinux ex5]$
+
+

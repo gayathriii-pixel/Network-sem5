@@ -1,0 +1,786 @@
+[24bcs135@mepcolinux ex6]$cat ex6.prn
+Script started on Friday 23 October 2026 04:12:41 PM IST
+[24bcs135@mepcolinux ex6]$cat code.c
+gayathri@nivi3:~/quintet/compiler/ex6/special$ cat clex.l
+
+%{
+#include "cyacc.tab.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+%}
+
+%option noyywrap
+
+%%
+
+"for"                    { return FOR; }
+"++"                     { return INC; }
+
+"<="|">="|"=="|"!="|"<"|">" {
+    yylval.str = strdup(yytext);
+    return RELOP;
+}
+
+[0-9]+ {
+    yylval.str = strdup(yytext);
+    return NUM;
+}
+
+[a-zA-Z_][a-zA-Z0-9_]* {
+    yylval.str = strdup(yytext);
+    return ID;
+}
+
+[+\-*/=(){};\[\]]        { return yytext[0]; }
+
+[ \t\r\n]+               ;
+
+. {
+    printf("Invalid character: %s\n", yytext);
+}
+
+%%
+gayathri@nivi3:~/quintet/compiler/ex6/special$ cat cyacc.y
+
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAXQ 500
+
+int yylex(void);
+void yyerror(const char *s);
+
+struct Quad
+{
+    char tac[100];
+    char op[20];
+    char arg1[40];
+    char arg2[40];
+    char result[40];
+};
+
+struct Quad quad[MAXQ], incQuad[100];
+
+int qcount = 0, incCount = 0;
+int capture = 0, tcount = 0, lcount = 0;
+
+char loopStart[20], bodyLabel[20], exitLabel[20];
+
+char *duplicate(const char *s)
+{
+    char *p = malloc(strlen(s) + 1);
+    if (!p)
+        exit(1);
+
+    strcpy(p, s);
+    return p;
+}
+
+char *newtemp(void)
+{
+    char b[20];
+    sprintf(b, "t%d", ++tcount);
+    return duplicate(b);
+}
+
+char *newlabel(void)
+{
+    char b[20];
+    sprintf(b, "L%d", ++lcount);
+    return duplicate(b);
+}
+
+void addquad(const char *tac, const char *op,
+             const char *a1, const char *a2,
+             const char *res)
+{
+    struct Quad *q = capture ? incQuad : quad;
+    int *n = capture ? &incCount : &qcount;
+    int limit = capture ? 100 : MAXQ;
+
+    if (*n >= limit)
+    {
+        fprintf(stderr, "Quadruple table full\n");
+        exit(1);
+    }
+
+    snprintf(q[*n].tac, sizeof(q[*n].tac), "%s", tac);
+    snprintf(q[*n].op, sizeof(q[*n].op), "%s", op);
+    snprintf(q[*n].arg1, sizeof(q[*n].arg1), "%s", a1);
+    snprintf(q[*n].arg2, sizeof(q[*n].arg2), "%s", a2);
+    snprintf(q[*n].result, sizeof(q[*n].result), "%s", res);
+
+    (*n)++;
+}
+
+void assign(const char *id, const char *value)
+{
+    char tac[100];
+
+    snprintf(tac, sizeof(tac), "%s = %s", id, value);
+    addquad(tac, "=", value, "-", id);
+}
+
+void operation(const char *op, const char *a,
+               const char *b, char *temp)
+{
+    char tac[100];
+
+    snprintf(tac, sizeof(tac), "%s = %s %s %s",
+             temp, a, op, b);
+
+    addquad(tac, op, a, b, temp);
+}
+
+void arrayload(const char *array, const char *index,
+               char *temp)
+{
+    char tac[100];
+
+    snprintf(tac, sizeof(tac), "%s = %s[%s]",
+             temp, array, index);
+
+    addquad(tac, "=[]", array, index, temp);
+}
+
+void emitLabel(const char *name)
+{
+    char tac[100];
+
+    snprintf(tac, sizeof(tac), "%s:", name);
+    addquad(tac, "label", "-", "-", name);
+}
+
+void emitGoto(const char *name)
+{
+    char tac[100];
+
+    snprintf(tac, sizeof(tac), "goto %s", name);
+    addquad(tac, "goto", "-", "-", name);
+}
+
+void emitCondition(const char *a, const char *op,
+                   const char *b, const char *dest)
+{
+    char tac[100];
+
+    snprintf(tac, sizeof(tac), "if %s %s %s goto %s",
+             a, op, b, dest);
+
+    addquad(tac, op, a, b, dest);
+}
+
+void appendIncrement(void)
+{
+    int i;
+
+    for (i = 0; i < incCount; i++)
+    {
+        addquad(incQuad[i].tac, incQuad[i].op,
+                incQuad[i].arg1, incQuad[i].arg2,
+                incQuad[i].result);
+    }
+}
+
+void printResult(void)
+{
+    int i;
+
+    printf("\n========== THREE ADDRESS CODE ==========\n");
+
+    for (i = 0; i < qcount; i++)
+        printf("%s\n", quad[i].tac);
+
+    printf("\n================ QUADRUPLE TABLE ================\n");
+
+    printf("%-30s | %-8s | %-8s | %-8s | %-8s\n",
+           "THREE ADDRESS CODE", "OPERATOR",
+           "ARG1", "ARG2", "RESULT");
+
+    printf("---------------------------------------------------------------\n");
+
+    for (i = 0; i < qcount; i++)
+    {
+        printf("%-30s | %-8s | %-8s | %-8s | %-8s\n",
+               quad[i].tac, quad[i].op,
+               quad[i].arg1, quad[i].arg2,
+               quad[i].result);
+    }
+
+    printf("---------------------------------------------------------------\n");
+}
+%}
+
+%union
+{
+    char *str;
+}
+
+%token FOR INC
+%token <str> ID NUM RELOP
+
+%type <str> expr term factor
+
+%left '+' '-'
+%left '*' '/'
+
+%%
+
+program
+    : forstmt
+      {
+          printResult();
+      }
+    ;
+
+forstmt
+    : FOR '(' init ';'
+      {
+          strcpy(loopStart, newlabel());
+          emitLabel(loopStart);
+      }
+      condition ';'
+      {
+          capture = 1;
+          incCount = 0;
+      }
+      increment
+      {
+          capture = 0;
+      }
+      ')' '{' stmt '}'
+      {
+          appendIncrement();
+          emitGoto(loopStart);
+          emitLabel(exitLabel);
+      }
+    ;
+
+init
+    : ID '=' expr
+      {
+          assign($1, $3);
+      }
+    ;
+
+condition
+    : expr RELOP expr
+      {
+          strcpy(bodyLabel, newlabel());
+          strcpy(exitLabel, newlabel());
+
+          emitCondition($1, $2, $3, bodyLabel);
+          emitGoto(exitLabel);
+          emitLabel(bodyLabel);
+      }
+    ;
+
+increment
+    : ID '=' expr
+      {
+          assign($1, $3);
+      }
+    | ID INC
+      {
+          char *t = newtemp();
+          operation("+", $1, "1", t);
+          assign($1, t);
+      }
+    ;
+
+stmt
+    : ID '=' expr ';'
+      {
+          assign($1, $3);
+      }
+    ;
+
+expr
+    : expr '+' term
+      {
+          char *t = newtemp();
+          operation("+", $1, $3, t);
+          $$ = t;
+      }
+    | expr '-' term
+      {
+          char *t = newtemp();
+          operation("-", $1, $3, t);
+          $$ = t;
+      }
+    | term
+      {
+          $$ = $1;
+      }
+    ;
+
+term
+    : term '*' factor
+      {
+          char *t = newtemp();
+          operation("*", $1, $3, t);
+          $$ = t;
+      }
+    | term '/' factor
+      {
+          char *t = newtemp();
+          operation("/", $1, $3, t);
+          $$ = t;
+      }
+    | factor
+      {
+          $$ = $1;
+      }
+    ;
+
+factor
+    : ID
+      {
+          $$ = $1;
+      }
+    | NUM
+      {
+          $$ = $1;
+      }
+    | '(' expr ')'
+      {
+          $$ = $2;
+      }
+    | ID '[' expr ']'
+      {
+          char *offset = newtemp();
+          char *value = newtemp();
+
+          /* Calculate byte offset: index * 4 */
+          operation("*", $3, "4", offset);
+
+          /* Load the array element using the offset */
+          arrayload($1, offset, value);
+
+          $$ = value;
+      }
+    ;
+
+%%
+
+void yyerror(const char *s)
+{
+    fprintf(stderr, "Syntax error: %s\n", s);
+}
+
+int main(void)
+{
+    printf("Enter the for-loop statement:\n");
+    return yyparse();vi c
+}
+gayathri@nivi3:~/quintet/compiler/ex6/special$ ./tac
+Enter the for-loop statement:
+for(i=0;i<n;i++)
+{
+s=s+a[i]*b[i];
+}
+
+========== THREE ADDRESS CODE ==========
+i = 0
+L1:
+if i < n goto L2
+goto L3
+L2:
+t2 = i * 4
+t3 = a[t2]
+t4 = i * 4
+t5 = b[t4]
+t6 = t3 * t5
+t7 = s + t6
+s = t7
+t1 = i + 1
+i = t1
+goto L1
+L3:
+
+================ QUADRUPLE TABLE ================
+THREE ADDRESS CODE             | OPERATOR | ARG1     | ARG2     | RESULT
+---------------------------------------------------------------
+i = 0                          | =        | 0        | -        | i
+L1:                            | label    | -        | -        | L1
+if i < n goto L2               | <        | i        | n        | L2
+goto L3                        | goto     | -        | -        | L3
+L2:                            | label    | -        | -        | L2
+t2 = i * 4                     | *        | i        | 4        | t2
+t3 = a[t2]                     | =[]      | a        | t2       | t3
+t4 = i * 4                     | *        | i        | 4        | t4
+t5 = b[t4]                     | =[]      | b        | t4       | t5
+t6 = t3 * t5                   | *        | t3       | t5       | t6
+t7 = s + t6                    | +        | s        | t6       | t7
+s = t7                         | =        | t7       | -        | s
+t1 = i + 1                     | +        | i        | 1        | t1
+i = t1                         | =        | t1       | -        | i
+goto L1                        | goto     | -        | -        | L1
+L3:                            | label    | -        | -        | L3
+---------------------------------------------------------------
+^Z
+[5]+  Stopped                    ./tac
+gayathri@nivi3:~/quintet/compiler/ex6/special$ ls
+clex.l  common  cyacc.tab.c  cyacc.tab.h  cyacc.y  lex.yy.c  tac
+gayathri@nivi3:~/quintet/compiler/ex6/special$ cd common
+gayathri@nivi3:~/quintet/compiler/ex6/special/common$ cat clex.l
+
+%{
+#include "cyacc.tab.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+%}
+
+%option noyywrap
+
+%%
+
+"if"                    { return IF; }
+
+"<="|">="|"=="|"!="|"<"|">" {
+                            yylval.str = strdup(yytext);
+                            return RELOP;
+                        }
+
+[0-9]+                  {
+                            yylval.str = strdup(yytext);
+                            return NUM;
+                        }
+
+[a-zA-Z_][a-zA-Z0-9_]*  {
+                            yylval.str = strdup(yytext);
+                            return ID;
+                        }
+
+[+\-*/=();{}]            { return yytext[0]; }
+
+[ \t\r\n]+              { /* Ignore whitespace */ }
+
+.                       { printf("Invalid character: %s\n", yytext); }
+
+%%
+gayathri@nivi3:~/quintet/compiler/ex6/special/common$ cat cyacc.y
+
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAXQ 200
+
+int yylex(void);
+void yyerror(const char *s);
+
+struct Quad
+{
+    char tac[80];
+    char op[16];
+    char arg1[32];
+    char arg2[32];
+    char result[32];
+};
+
+struct Quad quad[MAXQ];
+
+int qcount = 0;
+int tcount = 0;
+int lcount = 0;
+
+char thenLabel[32];
+char exitLabel[32];
+
+char condLeft[32];
+char condOp[16];
+char condRight[32];
+
+void addquad(const char *tac, const char *op,
+             const char *a1, const char *a2,
+             const char *res)
+{
+    if (qcount >= MAXQ)
+    {
+        printf("Quadruple table is full\n");
+        exit(1);
+    }
+
+    snprintf(quad[qcount].tac, sizeof(quad[qcount].tac),
+             "%s", tac);
+    snprintf(quad[qcount].op, sizeof(quad[qcount].op),
+             "%s", op);
+    snprintf(quad[qcount].arg1, sizeof(quad[qcount].arg1),
+             "%s", a1);
+    snprintf(quad[qcount].arg2, sizeof(quad[qcount].arg2),
+             "%s", a2);
+    snprintf(quad[qcount].result, sizeof(quad[qcount].result),
+             "%s", res);
+
+    qcount++;
+}
+
+char *newtemp(void)
+{
+    char *s = malloc(32);
+    if (!s) exit(1);
+
+    sprintf(s, "t%d", ++tcount);
+    return s;
+}
+
+char *newlabel(void)
+{
+    char *s = malloc(32);
+    if (!s) exit(1);
+
+    sprintf(s, "L%d", ++lcount);
+    return s;
+}
+
+void emitLabel(const char *label)
+{
+    char tac[80];
+
+    snprintf(tac, sizeof(tac), "%s:", label);
+    addquad(tac, "label", "-", "-", label);
+}
+
+void emitGoto(const char *label)
+{
+    char tac[80];
+
+    snprintf(tac, sizeof(tac), "goto %s", label);
+    addquad(tac, "goto", "-", "-", label);
+}
+
+void emitRelBranch(const char *a1, const char *op,
+                   const char *a2, const char *label)
+{
+    char tac[80];
+
+    snprintf(tac, sizeof(tac), "if %s %s %s goto %s",
+             a1, op, a2, label);
+
+    addquad(tac, op, a1, a2, label);
+}
+
+void printTAC(void)
+{
+    int i;
+
+    printf("\nTHREE ADDRESS CODE\n");
+    printf("----------------------------------------\n");
+
+    for (i = 0; i < qcount; i++)
+        printf("%s\n", quad[i].tac);
+}
+
+void printQuad(void)
+{
+    int i;
+
+    printf("\nQUADRUPLE TABLE\n");
+    printf("--------------------------------------------------------------------------------\n");
+
+    printf("%-32s | %-10s | %-8s | %-8s | %-8s\n",
+           "THREE ADDRESS CODE", "OPERATOR",
+           "ARG1", "ARG2", "RESULT");
+
+    printf("--------------------------------------------------------------------------------\n");
+
+    for (i = 0; i < qcount; i++)
+    {
+        printf("%-32s | %-10s | %-8s | %-8s | %-8s\n",
+               quad[i].tac, quad[i].op,
+               quad[i].arg1, quad[i].arg2,
+               quad[i].result);
+    }
+
+    printf("--------------------------------------------------------------------------------\n");
+}
+%}
+
+%union
+{
+    char *str;
+}
+
+%token IF
+%token <str> ID NUM RELOP
+
+%type <str> expr term factor comparison
+
+%left '+' '-'
+%left '*' '/'
+
+%%
+
+program
+    : stmt
+      {
+          printTAC();
+          printQuad();
+      }
+    ;
+
+stmt
+    : ID '=' expr ';'
+      {
+          char tac[80];
+
+          snprintf(tac, sizeof(tac), "%s = %s", $1, $3);
+
+          addquad(tac, "=", $3, "-", $1);
+      }
+    | IF '(' comparison ')'
+      {
+          strcpy(thenLabel, newlabel());
+          strcpy(exitLabel, newlabel());
+
+          emitRelBranch(condLeft, condOp,
+                        condRight, thenLabel);
+
+          emitGoto(exitLabel);
+          emitLabel(thenLabel);
+      }
+      stmt
+      {
+          emitLabel(exitLabel);
+      }
+    ;
+
+comparison
+    : expr RELOP expr
+      {
+          snprintf(condLeft, sizeof(condLeft), "%s", $1);
+          snprintf(condOp, sizeof(condOp), "%s", $2);
+          snprintf(condRight, sizeof(condRight), "%s", $3);
+
+          $$ = $1;
+      }
+    ;
+
+expr
+    : expr '+' term
+      {
+          char *temp = newtemp();
+          char tac[80];
+
+          snprintf(tac, sizeof(tac), "%s = %s + %s",
+                   temp, $1, $3);
+
+          addquad(tac, "+", $1, $3, temp);
+          $$ = temp;
+      }
+    | expr '-' term
+      {
+          char *temp = newtemp();
+          char tac[80];
+
+          snprintf(tac, sizeof(tac), "%s = %s - %s",
+                   temp, $1, $3);
+
+          addquad(tac, "-", $1, $3, temp);
+          $$ = temp;
+      }
+    | term
+      {
+          $$ = $1;
+      }
+    ;
+
+term
+    : term '*' factor
+      {
+          char *temp = newtemp();
+          char tac[80];
+
+          snprintf(tac, sizeof(tac), "%s = %s * %s",
+                   temp, $1, $3);
+
+          addquad(tac, "*", $1, $3, temp);
+          $$ = temp;
+      }
+    | term '/' factor
+      {
+          char *temp = newtemp();
+          char tac[80];
+
+          snprintf(tac, sizeof(tac), "%s = %s / %s",
+                   temp, $1, $3);
+
+          addquad(tac, "/", $1, $3, temp);
+          $$ = temp;
+      }
+    | factor
+      {
+          $$ = $1;
+      }
+    ;
+
+factor
+    : ID
+      {
+          $$ = $1;
+      }
+    | NUM
+      {
+          $$ = $1;
+      }
+    | '(' expr ')'
+      {
+          $$ = $2;
+      }
+    ;
+
+%%
+
+void yyerror(const char *s)
+{
+    fprintf(stderr, "Syntax error: %s\n", s);
+}
+
+int main(void)
+{
+    printf("Enter the if statement:\n");
+    yyparse();
+
+    return 0;
+}
+gayathri@nivi3:~/quintet/compiler/ex6/special/common$ ./tac
+Enter the if statement:
+if(a<b)
+a=a+25;
+
+THREE ADDRESS CODE
+----------------------------------------
+if a < b goto L1
+goto L2
+L1:
+t1 = a + 25
+a = t1
+L2:
+
+QUADRUPLE TABLE
+--------------------------------------------------------------------------------
+THREE ADDRESS CODE               | OPERATOR   | ARG1     | ARG2     | RESULT
+--------------------------------------------------------------------------------
+if a < b goto L1                 | <          | a        | b        | L1
+goto L2                          | goto       | -        | -        | L2
+L1:                              | label      | -        | -        | L1
+t1 = a + 25                      | +          | a        | 25       | t1
+a = t1                           | =          | t1       | -        | a
+L2:                              | label      | -        | -        | L2
+--------------------------------------------------------------------------------
+^Z
+[6]+  Stopped                    ./tac
+gayathri@nivi3:~/quintet/compiler/ex6/special/common$
+[24bcs135@mepcolinux ex6]$exit
+exit
+
+Script done on Friday 23 October 2026 04:12:46 PM IST
+[24bcs135@mepcolinux ex6]$
+
+
